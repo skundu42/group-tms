@@ -28,7 +28,7 @@ export type Deps = {
 /**
  * Finds all valid (not blacklisted) backing completed events since the last known block.
  */
-export async function findValidBackingEvents(
+async function findValidBackingEvents(
   circlesRpc: ICirclesRpc,
   blacklistingService: IBlacklistingService,
   backingFactoryAddress: string,
@@ -41,7 +41,7 @@ export async function findValidBackingEvents(
   blacklistedAddresses: Set<string>
 }> {
   const newBackingCompletedEvents = await circlesRpc.fetchBackingCompletedEvents(backingFactoryAddress, lastKnownBlock, toBlock);
-  LOG.debug(`Fetched ${newBackingCompletedEvents.length} completed backing events since block ${lastKnownBlock}.`);
+  LOG.debug(`Fetched ${newBackingCompletedEvents.length} completed backing events since block ${lastKnownBlock} to block ${toBlock}.`);
 
   const addressesToCheck = Array.from(new Set(newBackingCompletedEvents.map(e => e.backer.toLowerCase())));
   const verdicts = await blacklistingService.checkBlacklist(addressesToCheck);
@@ -58,7 +58,7 @@ export async function findValidBackingEvents(
   };
 }
 
-export function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
+function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
   const trustBatchSize = 50;
   const batches: CrcV2_CirclesBackingCompleted[][] = [];
   for (let i = 0; i < backingEvents.length; i += trustBatchSize) {
@@ -71,7 +71,7 @@ export function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
  * Trusts all new backers by checking their backing completed events against the blacklisting service
  * and adding them to the Circles Backers group. (Logs only when something happens.)
  */
-export async function trustAllNewBackers(
+async function trustAllNewBackers(
   circlesRpc: ICirclesRpc,
   blacklistingService: IBlacklistingService,
   groupService: IGroupService,
@@ -90,7 +90,7 @@ export async function trustAllNewBackers(
 
   const haveAnyCompletedEvents = backingEvents.totalBackingEvents > 0;
   if (haveAnyCompletedEvents) {
-    LOG.info(`Found ${backingEvents.totalBackingEvents} completed backing events since block ${lastKnownBlock}.`);
+    LOG.info(`Found ${backingEvents.totalBackingEvents} completed backing events since block ${lastKnownBlock} to block ${currentHead}.`);
     LOG.info(`  - Valid (non-blacklisted): ${backingEvents.validBackingEvents.length}`);
     const haveBlacklisted = backingEvents.blacklistedAddresses.size > 0;
     if (haveBlacklisted) {
@@ -151,7 +151,7 @@ export async function trustAllNewBackers(
 /**
  * Finds all pending backing processes that have been initiated but not yet completed since the last known block.
  */
-export async function findPendingBackingProcesses(
+async function findPendingBackingProcesses(
   circlesRpc: ICirclesRpc,
   backingFactoryAddress: string,
   lastKnownBlock: number,
@@ -183,7 +183,7 @@ export async function findPendingBackingProcesses(
 /**
  * Computes the exact deadline of a CirclesBacking instance.
  */
-export function computeOrderDeadlineSeconds(initiated: CrcV2_CirclesBackingInitiated): number {
+function computeOrderDeadlineSeconds(initiated: CrcV2_CirclesBackingInitiated): number {
   const hasTimestamp = typeof initiated.timestamp === "number" && initiated.timestamp > 0;
   if (!hasTimestamp) {
     throw new Error(`Initiated event at block ${initiated.blockNumber} has no timestamp.`);
@@ -233,7 +233,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
 
   const havePending = pendingBackingProcesses.length > 0;
   if (havePending) {
-    LOG.info(`Found ${pendingBackingProcesses.length} pending backing processes since block ${lastKnownBlock}.`);
+    LOG.info(`Found ${pendingBackingProcesses.length} pending backing processes since block ${lastKnownBlock} to block ${safeHeadBlock}`);
     LOG.table(pendingBackingProcesses, ["blockNumber", "transactionHash", "backer", "circlesBackingInstance"]);
   }
 

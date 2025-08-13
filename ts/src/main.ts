@@ -6,7 +6,8 @@ import {BackingInstanceService} from "./services/backingInstanceService";
 import {SlackService} from "./services/slackService";
 import {LoggerService} from "./services/loggerService";
 import {runOnce} from "./runner";
-import {setInterval} from "node:timers";
+import {logger} from "bs-logger";
+import {formatErrorWithCauses} from "./formatError";
 
 // Config
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
@@ -19,8 +20,9 @@ const expectedTimeTillCompletion = Number.parseInt(process.env.EXPECTED_SECONDS_
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const confirmationBlocks = Number.parseInt(process.env.CONFIRMATION_BLOCKS || "2");
+const errorsBeforeCrash = 3;
 
-const logger = new LoggerService(verboseLogging);
+const rootLogger = new LoggerService(verboseLogging);
 
 // Concrete services
 const circlesRpc = new CirclesRpcService(rpcUrl);
@@ -30,37 +32,62 @@ const groupService = new GroupService(rpcUrl, servicePrivateKey);
 const cowSwapService = new BackingInstanceService(rpcUrl, servicePrivateKey);
 const slackService = new SlackService(slackWebhookUrl);
 
-async function run() {
-  logger.info("Checking for new backers...");
-  const subLogger = logger.child("runOnce");
-  await runOnce({
-      circlesRpc,
-      chainRpc,
-      blacklistingService,
-      groupService,
-      cowSwapService,
-      slackService,
-      logger: subLogger
-    },
-    {
-      backingFactoryAddress,
-      backersGroupAddress,
-      deployedAtBlock,
-      expectedTimeTillCompletion,
-      confirmationBlocks
-    }
-  ).catch((error) => {
-    console.error("An error occurred:", error);
-    process.exit(1);
-  }).finally(() => {
-    logger.info("Finished checking for new backers.");
+const errors: any[] = [];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 
-run().then(() => {
-  // Run once every minute
-  setInterval(() => {
-    run();
-  }, 60 * 1000); // Run every minute
-});
+async function loop() {
+  while (errors.length < errorsBeforeCrash) {
+    try {
+      rootLogger.info("Checking for new backers...");
 
+      const logger = rootLogger.child("process");
+      await runOnce(
+        {
+          circlesRpc,
+          chainRpc,
+          blacklistingService,
+          groupService,
+          cowSwapService,
+          slackService,
+          logger: logger
+        },
+        {
+          backingFactoryAddress,
+          backersGroupAddress,
+          deployedAtBlock,
+          expectedTimeTillCompletion,
+          confirmationBlocks
+        }
+      );
+    } catch (caught: unknown) {
+      const isError = caught instanceof Error;
+      const baseError = isError ? caught : new Error(String(caught));
+
+      // Wrap so your callsite (this catch frame) appears in the printed stack.
+      const wrapped = new Error("runOnce failed in loop()", {cause: baseError});
+      errors.push(wrapped);
+
+      const errorIndex = errors.length;
+      const thresholdReached = errorIndex >= errorsBeforeCrash;
+
+      rootLogger.error(`Error ${errorIndex} of max. ${errorsBeforeCrash}`);
+      rootLogger.error(formatErrorWithCauses(wrapped));
+
+      if (thresholdReached) {
+        rootLogger.error("Error threshold reached. Exiting with code 1.");
+        process.exit(1);
+      }
+    }
+
+    // Wait one minute
+    await delay(60 * 1000);
+  }
+}
+
+loop();
+logger.info(`Process died.`)
