@@ -1,0 +1,151 @@
+import {CrcV2_CirclesBackingCompleted, CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
+import {CrcV2_Trust} from "@circles-sdk/data";
+import {ICirclesRpc} from "../src/interfaces/ICirclesRpc";
+import {IChainRpc} from "../src/interfaces/IChainRpc";
+import {IBlacklistingService, IBlacklistServiceVerdict} from "../src/interfaces/IBlacklistingService";
+import {IGroupService} from "../src/interfaces/IGroupService";
+import {
+  CreateLBPResult,
+  IBackingInstanceService,
+  ResetCowSwapOrderResult
+} from "../src/interfaces/IBackingInstanceService";
+import {ISlackService} from "../src/interfaces/ISlackService";
+import {ILoggerService} from "../src/interfaces/ILoggerService";
+
+export class FakeLogger implements ILoggerService {
+  logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
+
+  constructor(private readonly verbose: boolean = true) {
+  }
+
+  private push(level: any, ...args: unknown[]) {
+    if (level === "debug" || level === "table") {
+      if (!this.verbose) {
+        return;
+      }
+    }
+    this.logs.push({level, args});
+  }
+
+  info(...args: unknown[]): void {
+    this.push("info", ...args);
+  }
+
+  warn(...args: unknown[]): void {
+    this.push("warn", ...args);
+  }
+
+  error(...args: unknown[]): void {
+    this.push("error", ...args);
+  }
+
+  debug(...args: unknown[]): void {
+    this.push("debug", ...args);
+  }
+
+  table(data: any, columns?: readonly (string | number)[]): void {
+    this.push("table", data, columns);
+  }
+
+  child(prefix: string): ILoggerService {
+    return this;
+  }
+}
+
+export class FakeCirclesRpc implements ICirclesRpc {
+  initiated: CrcV2_CirclesBackingInitiated[] = [];
+  completed: CrcV2_CirclesBackingCompleted[] = [];
+  trusts: CrcV2_Trust[] = [];
+  trusteesByTruster: Record<string, string[]> = {};
+
+  async fetchBackingInitiatedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingInitiated[]> {
+    const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
+    return this.initiated.filter(e => e.blockNumber >= fromBlock && e.blockNumber <= upper);
+  }
+
+  async fetchBackingCompletedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingCompleted[]> {
+    const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
+    return this.completed.filter(e => e.blockNumber >= fromBlock && e.blockNumber <= upper);
+  }
+
+  async fetchAllTrustees(truster: string): Promise<string[]> {
+    return this.trusteesByTruster[truster.toLowerCase()] ?? [];
+  }
+}
+
+export class FakeChainRpc implements IChainRpc {
+  constructor(private readonly head: { blockNumber: number; timestamp: number }) {
+  }
+
+  async getHeadBlock(): Promise<{ blockNumber: number; timestamp: number }> {
+    return this.head;
+  }
+
+  async getTransactionReceipt(txHash: string): Promise<any> {
+    throw new Error("Not used in these tests");
+  }
+}
+
+export class FakeBlacklist implements IBlacklistingService {
+  constructor(private readonly blocked: Set<string> = new Set(), private readonly flagged: Set<string> = new Set()) {
+  }
+
+  async checkBlacklist(addresses: string[]): Promise<IBlacklistServiceVerdict[]> {
+    return addresses.map(a => {
+      const lc = a.toLowerCase();
+      if (this.blocked.has(lc)) {
+        return {address: lc, is_bot: true, category: "blocked"};
+      }
+      if (this.flagged.has(lc)) {
+        return {address: lc, is_bot: false, category: "flagged"};
+      }
+      return {address: lc, is_bot: false};
+    });
+  }
+}
+
+export class FakeGroupService implements IGroupService {
+  calls: { groupAddress: string; trusteeAddresses: string[] }[] = [];
+
+  async trustBatchWithConditions(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
+    this.calls.push({groupAddress, trusteeAddresses: [...trusteeAddresses]});
+    return `0xtrust_${this.calls.length}`;
+  }
+
+  async fetchGroupOwnerAndService(): Promise<any> {
+    throw new Error("Not under test");
+  }
+}
+
+export class FakeBackingInstanceService implements IBackingInstanceService {
+  simulateReset: Record<string, ResetCowSwapOrderResult> = {};
+  simulateCreate: Record<string, CreateLBPResult> = {};
+  resetCalls: string[] = [];
+  createCalls: string[] = [];
+
+  async simulateResetCowSwapOrder(addr: string): Promise<ResetCowSwapOrderResult> {
+    return this.simulateReset[addr.toLowerCase()];
+  }
+
+  async simulateCreateLbp(addr: string): Promise<CreateLBPResult> {
+    return this.simulateCreate[addr.toLowerCase()];
+  }
+
+  async resetCowSwapOrder(addr: string): Promise<string> {
+    this.resetCalls.push(addr.toLowerCase());
+    return `0xreset_${addr.toLowerCase()}`;
+  }
+
+  async createLbp(addr: string): Promise<string> {
+    this.createCalls.push(addr.toLowerCase());
+    return `0xcreate_${addr.toLowerCase()}`;
+  }
+}
+
+export class FakeSlack implements ISlackService {
+  notifications: { event: CrcV2_CirclesBackingInitiated; reason: string }[] = [];
+
+  async notifyBackingNotCompleted(backingInitiatedEvent: CrcV2_CirclesBackingInitiated, reason: string): Promise<void> {
+    this.notifications.push({event: backingInitiatedEvent, reason});
+  }
+}

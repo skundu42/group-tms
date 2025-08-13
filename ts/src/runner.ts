@@ -8,6 +8,8 @@ import {ILoggerService} from "./interfaces/ILoggerService";
 import {CrcV2_CirclesBackingCompleted, CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
 
 export type RunConfig = {
+  confirmationBlocks: number;
+  backingFactoryAddress: string;
   backersGroupAddress: string;
   deployedAtBlock: number;
   expectedTimeTillCompletion: number; // seconds
@@ -29,6 +31,7 @@ export type Deps = {
 export async function findValidBackingEvents(
   circlesRpc: ICirclesRpc,
   blacklistingService: IBlacklistingService,
+  backingFactoryAddress: string,
   lastKnownBlock: number,
   toBlock: number,
   LOG: ILoggerService
@@ -37,7 +40,7 @@ export async function findValidBackingEvents(
   validBackingEvents: CrcV2_CirclesBackingCompleted[],
   blacklistedAddresses: Set<string>
 }> {
-  const newBackingCompletedEvents = await circlesRpc.fetchBackingCompletedEvents(lastKnownBlock, toBlock);
+  const newBackingCompletedEvents = await circlesRpc.fetchBackingCompletedEvents(backingFactoryAddress, lastKnownBlock, toBlock);
   LOG.debug(`Fetched ${newBackingCompletedEvents.length} completed backing events since block ${lastKnownBlock}.`);
 
   const addressesToCheck = Array.from(new Set(newBackingCompletedEvents.map(e => e.backer.toLowerCase())));
@@ -73,6 +76,7 @@ export async function trustAllNewBackers(
   blacklistingService: IBlacklistingService,
   groupService: IGroupService,
   groupAddress: string,
+  backingFactoryAddress: string,
   lastKnownBlock: number,
   currentHead: number,
   LOG: ILoggerService
@@ -82,7 +86,7 @@ export async function trustAllNewBackers(
   blacklistedAddresses: Set<string>,
   newBackingEvents: CrcV2_CirclesBackingCompleted[]
 }> {
-  const backingEvents = await findValidBackingEvents(circlesRpc, blacklistingService, lastKnownBlock, currentHead, LOG);
+  const backingEvents = await findValidBackingEvents(circlesRpc, blacklistingService, backingFactoryAddress, lastKnownBlock, currentHead, LOG);
 
   const haveAnyCompletedEvents = backingEvents.totalBackingEvents > 0;
   if (haveAnyCompletedEvents) {
@@ -149,6 +153,7 @@ export async function trustAllNewBackers(
  */
 export async function findPendingBackingProcesses(
   circlesRpc: ICirclesRpc,
+  backingFactoryAddress: string,
   lastKnownBlock: number,
   currentHead: number,
   completedBackingProcesses: {
@@ -162,7 +167,7 @@ export async function findPendingBackingProcesses(
   const key = (event: CrcV2_CirclesBackingInitiated | CrcV2_CirclesBackingCompleted) =>
     `${event.backer.toLowerCase()}-${event.circlesBackingInstance.toLowerCase()}`;
 
-  const initiatedBackingProcesses = await circlesRpc.fetchBackingInitiatedEvents(lastKnownBlock, currentHead);
+  const initiatedBackingProcesses = await circlesRpc.fetchBackingInitiatedEvents(backingFactoryAddress, lastKnownBlock, currentHead);
   LOG.debug(`Fetched ${initiatedBackingProcesses.length} initiated backing processes.`);
 
   const completedKeys = new Set(completedBackingProcesses.validBackingEvents.map(key));
@@ -198,7 +203,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
 
   // 0. Head with a small reorg buffer
   const currentHead = await chainRpc.getHeadBlock();
-  const safeHeadBlock = Math.max(0, currentHead.blockNumber - 6 /* confirmations */);
+  const safeHeadBlock = Math.max(0, currentHead.blockNumber - cfg.confirmationBlocks /* confirmations */);
   LOG.debug(`Head=${currentHead.blockNumber}, safeHead=${safeHeadBlock}, headTs=${currentHead.timestamp}`);
 
   // 1. Start from contract deployment
@@ -210,6 +215,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
     blacklistingService,
     groupService,
     cfg.backersGroupAddress,
+    cfg.backingFactoryAddress,
     lastKnownBlock,
     safeHeadBlock,
     LOG
@@ -218,6 +224,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
   // 5. Initiated-but-not-completed
   const pendingBackingProcesses = await findPendingBackingProcesses(
     circlesRpc,
+    cfg.backingFactoryAddress,
     lastKnownBlock,
     safeHeadBlock,
     completedBackingProcesses,
@@ -265,8 +272,9 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
           continue;
         }
         case "OrderNotYetFilled": {
-          LOG.info(`OrderNotYetFilled for ${event.circlesBackingInstance} after our deadline calc; notifying Slack.`);
-          await slackService.notifyBackingNotCompleted(event, "OrderNotYetFilled - Our deadline calc vs on-chain deadline disagree");
+          const reason = `OrderNotYetFilled for ${event.circlesBackingInstance} after our deadline calc; will re-check later.`;
+          LOG.info(reason);
+          await slackService.notifyBackingNotCompleted(event, reason);
           break; // fall through to reset below
         }
         case "BackingAssetBalanceInsufficient": {
@@ -287,7 +295,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
         LOG.info(`Resetting order for ${event.backer} at ${event.circlesBackingInstance}...`);
         const txHash = await cowSwapService.resetCowSwapOrder(event.circlesBackingInstance);
         LOG.info(`Resetting order for ${event.backer} at ${event.circlesBackingInstance} succeeded: ${txHash}`);
-        continue;
+        break;
       }
       case "OrderAlreadySettled": {
         const lbpState = await cowSwapService.simulateCreateLbp(event.circlesBackingInstance);
@@ -315,7 +323,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
         throw new Error(`Unknown LBP state ${lbpState}`);
       }
       case "OrderUidIsTheSame": {
-        continue;
+        break;
       }
       default:
         throw new Error(`Unknown order state ${orderState}`);

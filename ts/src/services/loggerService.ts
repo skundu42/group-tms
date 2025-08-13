@@ -44,7 +44,7 @@ export class LoggerService implements ILoggerService {
     }
   }
 
-  child(prefix: string): LoggerService {
+  child(prefix: string): ILoggerService {
     const next = this.prefix ? `${this.prefix}:${prefix}` : prefix;
     return new LoggerService(this.verbose, next);
   }
