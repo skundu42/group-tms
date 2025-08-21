@@ -58,7 +58,7 @@ async function findValidBackingEvents(
   };
 }
 
-function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
+export function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
   const trustBatchSize = 50;
   const batches: CrcV2_CirclesBackingCompleted[][] = [];
   for (let i = 0; i < backingEvents.length; i += trustBatchSize) {
@@ -71,7 +71,7 @@ function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
  * Trusts all new backers by checking their backing completed events against the blacklisting service
  * and adding them to the Circles Backers group. (Logs only when something happens.)
  */
-async function trustAllNewBackers(
+export async function trustAllNewBackers(
   circlesRpc: ICirclesRpc,
   blacklistingService: IBlacklistingService,
   groupService: IGroupService,
@@ -151,7 +151,7 @@ async function trustAllNewBackers(
 /**
  * Finds all pending backing processes that have been initiated but not yet completed since the last known block.
  */
-async function findPendingBackingProcesses(
+export async function findPendingBackingProcesses(
   circlesRpc: ICirclesRpc,
   backingFactoryAddress: string,
   lastKnownBlock: number,
@@ -183,7 +183,7 @@ async function findPendingBackingProcesses(
 /**
  * Computes the exact deadline of a CirclesBacking instance.
  */
-function computeOrderDeadlineSeconds(initiated: CrcV2_CirclesBackingInitiated): number {
+export function computeOrderDeadlineSeconds(initiated: CrcV2_CirclesBackingInitiated): number {
   const hasTimestamp = typeof initiated.timestamp === "number" && initiated.timestamp > 0;
   if (!hasTimestamp) {
     throw new Error(`Initiated event at block ${initiated.blockNumber} has no timestamp.`);

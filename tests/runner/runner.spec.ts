@@ -116,7 +116,7 @@ describe("trustAllNewBackers", () => {
 
     const grp = deps.groupService as FakeGroupService;
     expect(res.totalBackingEvents).toBe(2);
-    expect(res.validBackingEvents.map((x) => x.backer)).toEqual([b.backer]);
+    expect(res.validBackingEvents.map((x:any) => x.backer)).toEqual([b.backer]);
     expect(res.newBackingEvents.length).toBe(0);
     expect(grp.calls.length).toBe(0);
   });
@@ -184,7 +184,7 @@ describe("trustAllNewBackers", () => {
     expect(Array.from(res.blacklistedAddresses)).toEqual(
       expect.arrayContaining([badEvt.backer.toLowerCase(), warnEvt.backer.toLowerCase()])
     );
-    expect(res.validBackingEvents.map(e => e.backer.toLowerCase())).toEqual([okEvt.backer.toLowerCase()]);
+    expect(res.validBackingEvents.map((e:any) => e.backer.toLowerCase())).toEqual([okEvt.backer.toLowerCase()]);
 
     expect(grp.calls).toHaveLength(1);
     expect(grp.calls[0].trusteeAddresses.map(x => x.toLowerCase())).toEqual([okEvt.backer.toLowerCase()]);
@@ -241,7 +241,7 @@ describe("findPendingBackingProcesses", () => {
       deps.logger
     );
 
-    expect(pending.map((p) => p.circlesBackingInstance.toLowerCase())).toEqual([
+    expect(pending.map((p:any) => p.circlesBackingInstance.toLowerCase())).toEqual([
       init2.circlesBackingInstance.toLowerCase()
     ]);
   });
