@@ -144,8 +144,13 @@ export class FakeBackingInstanceService implements IBackingInstanceService {
 
 export class FakeSlack implements ISlackService {
   notifications: { event: CrcV2_CirclesBackingInitiated; reason: string }[] = [];
+  generalNotifications: string[] = [];
 
   async notifyBackingNotCompleted(backingInitiatedEvent: CrcV2_CirclesBackingInitiated, reason: string): Promise<void> {
     this.notifications.push({event: backingInitiatedEvent, reason});
+  }
+
+  async notifySlackStartorCrash(message: string): Promise<void> {
+    this.generalNotifications.push(message);
   }
 }

@@ -34,6 +34,42 @@ const slackService = new SlackService(slackWebhookUrl);
 
 const errors: any[] = [];
 
+process.on('SIGTERM', async () => {
+  try {
+    await slackService.notifySlackStartorCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+  } catch (error) {
+    console.error('Failed to send shutdown notification:', error);
+  }
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  try {
+    await slackService.notifySlackStartorCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+  } catch (error) {
+    console.error('Failed to send shutdown notification:', error);
+  }
+  process.exit(0);
+});
+
+// Send startup notification
+(async () => {
+  try {
+    const startupMessage = `✅ **Circles Group TMS Service Started**\n\n` +
+      `Service is now running and monitoring for new backers.\n` +
+      `- RPC: ${rpcUrl}\n` +
+      `- Group: ${backersGroupAddress}\n` +
+      `- Factory: ${backingFactoryAddress}\n` +
+      `- Start Block: ${deployedAtBlock}\n` +
+      `- Error Threshold: ${errorsBeforeCrash}`;
+    
+    await slackService.notifySlackStartorCrash(startupMessage);
+    rootLogger.info("Slack startup notification sent successfully.");
+  } catch (slackError) {
+    rootLogger.warn("Failed to send Slack startup notification:", slackError);
+  }
+})();
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -80,6 +116,20 @@ async function loop() {
 
       if (thresholdReached) {
         rootLogger.error("Error threshold reached. Exiting with code 1.");
+        
+        // Send Slack notification before crashing
+        try {
+          const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+            `Error threshold reached (${errorIndex}/${errorsBeforeCrash}).\n` +
+            `Last error: ${baseError.message}\n\n` +
+            `Service will exit with code 1. Please investigate and restart.`;
+          
+          await slackService.notifySlackStartorCrash(crashMessage);
+          rootLogger.info("Slack crash notification sent successfully.");
+        } catch (slackError) {
+          rootLogger.error("Failed to send Slack crash notification:", slackError);
+        }
+        
         process.exit(1);
       }
     }
@@ -90,4 +140,4 @@ async function loop() {
 }
 
 loop();
-logger.info(`Process died.`)
+logger.info(`Process died.`);
