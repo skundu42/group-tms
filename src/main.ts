@@ -36,7 +36,7 @@ const errors: any[] = [];
 
 process.on('SIGTERM', async () => {
   try {
-    await slackService.notifySlackStartorCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     console.error('Failed to send shutdown notification:', error);
   }
@@ -45,7 +45,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   try {
-    await slackService.notifySlackStartorCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     console.error('Failed to send shutdown notification:', error);
   }
@@ -63,7 +63,7 @@ process.on('SIGINT', async () => {
       `- Start Block: ${deployedAtBlock}\n` +
       `- Error Threshold: ${errorsBeforeCrash}`;
     
-    await slackService.notifySlackStartorCrash(startupMessage);
+    await slackService.notifySlackStartOrCrash(startupMessage);
     rootLogger.info("Slack startup notification sent successfully.");
   } catch (slackError) {
     rootLogger.warn("Failed to send Slack startup notification:", slackError);
@@ -124,7 +124,7 @@ async function loop() {
             `Last error: ${baseError.message}\n\n` +
             `Service will exit with code 1. Please investigate and restart.`;
           
-          await slackService.notifySlackStartorCrash(crashMessage);
+          await slackService.notifySlackStartOrCrash(crashMessage);
           rootLogger.info("Slack crash notification sent successfully.");
         } catch (slackError) {
           rootLogger.error("Failed to send Slack crash notification:", slackError);

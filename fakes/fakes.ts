@@ -150,7 +150,7 @@ export class FakeSlack implements ISlackService {
     this.notifications.push({event: backingInitiatedEvent, reason});
   }
 
-  async notifySlackStartorCrash(message: string): Promise<void> {
+  async notifySlackStartOrCrash(message: string): Promise<void> {
     this.generalNotifications.push(message);
   }
 }

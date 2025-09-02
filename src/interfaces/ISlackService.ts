@@ -4,5 +4,5 @@ export interface ISlackService {
 
     notifyBackingNotCompleted(backingInitiatedEvent: CrcV2_CirclesBackingInitiated, reason: string): Promise<void>;
 
-    notifySlackStartorCrash(message: string): Promise<void>;
+    notifySlackStartOrCrash(message: string): Promise<void>;
 }
