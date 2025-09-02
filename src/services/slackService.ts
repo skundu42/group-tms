@@ -25,4 +25,22 @@ export class SlackService implements ISlackService {
       throw new Error(`Slack notify failed: ${res.status} ${await res.text()}`);
     }
   }
+
+  async notifySlackStartOrCrash(message: string): Promise<void> {
+    if (!this.webhookUrl) {
+      console.warn(`Slack notification (no webhook configured): ${message}`);
+      return;
+    }
+
+    const res = await fetch(this.webhookUrl, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        text: message
+      })
+    });
+    if (!res.ok) {
+      throw new Error(`Slack notify failed: ${res.status} ${await res.text()}`);
+    }
+  }
 }
