@@ -1,10 +1,10 @@
-import {ICirclesRpc} from "./interfaces/ICirclesRpc";
-import {IBlacklistingService} from "./interfaces/IBlacklistingService";
-import {IGroupService} from "./interfaces/IGroupService";
-import {IBackingInstanceService, ResetCowSwapOrderResult, CreateLBPResult} from "./interfaces/IBackingInstanceService";
-import {ISlackService} from "./interfaces/ISlackService";
-import {IChainRpc} from "./interfaces/IChainRpc";
-import {ILoggerService} from "./interfaces/ILoggerService";
+import {ICirclesRpc} from "../../interfaces/ICirclesRpc";
+import {IBlacklistingService} from "../../interfaces/IBlacklistingService";
+import {IGroupService} from "../../interfaces/IGroupService";
+import {IBackingInstanceService, ResetCowSwapOrderResult, CreateLBPResult} from "../../interfaces/IBackingInstanceService";
+import {ISlackService} from "../../interfaces/ISlackService";
+import {IChainRpc} from "../../interfaces/IChainRpc";
+import {ILoggerService} from "../../interfaces/ILoggerService";
 import {CrcV2_CirclesBackingCompleted, CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
 
 export type RunConfig = {
