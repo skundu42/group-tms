@@ -10,7 +10,7 @@ module.exports = {
 
   collectCoverage: true,
   collectCoverageFrom: [
-    "<rootDir>/src/runner.ts",
+    "<rootDir>/src/apps/crc-backers/logic.ts",
     "<rootDir>/fakes/fakes.ts",
     "!<rootDir>/src/main.ts",
     "!**/*.d.ts",

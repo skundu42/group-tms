@@ -8,6 +8,8 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
+    "start:crc-backers": "node dist/src/apps/crc-backers/main.js",
+    "start:all": "node dist/src/apps/manager.js",
     "test": "jest --config jest.config.ts",
     "test:coverage": "jest --config jest.config.ts --coverage"
   },

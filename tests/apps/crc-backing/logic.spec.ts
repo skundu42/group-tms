@@ -3,8 +3,11 @@ import {
   computeOrderDeadlineSeconds,
   findPendingBackingProcesses,
   trustAllNewBackers,
-  batchEvents
-} from "../../src/runner";
+  batchEvents,
+  type Deps,
+  type RunConfig
+} from "../../../src/apps/crc-backers/logic";
+
 import {
   FakeBackingInstanceService,
   FakeBlacklist,
@@ -13,10 +16,9 @@ import {
   FakeGroupService,
   FakeLogger,
   FakeSlack
-} from "../../fakes/fakes";
-import {Deps, RunConfig} from "../../src/runner";
+} from "../../../fakes/fakes";
 import {Address} from "@circles-sdk/utils";
-import {mkCompleted, mkInitiated} from "../../fakes/factories";
+import {mkCompleted, mkInitiated} from "../../../fakes/factories";
 
 const GROUP = "0xgroup000000000000000000000000000000000000";
 const DEPLOYED_AT = 39_743_285;
@@ -367,13 +369,14 @@ describe("runOnce – reconciliation flow", () => {
     await expect(runOnce(deps, CFG)).rejects.toThrow(/has no timestamp/);
   });
 
-  it("past on-chain deadline: simulateCreate OrderNotYetFilled → Slack notify", async () => {
+  it("past on-chain deadline: simulateCreate OrderNotYetFilled → Slack notify, then fallthrough pre-deadline path", async () => {
     const deps = makeDeps();
     const rpc = deps.circlesRpc as FakeCirclesRpc;
     const svc = deps.cowSwapService as FakeBackingInstanceService;
     const slack = deps.slackService as FakeSlack;
 
     const inst = "0xinst202".padEnd(42, "1");
+
     const evt = mkInitiated({
       backer: "0xok".padEnd(42, "0") as Address,
       circlesBackingInstance: inst as Address,
@@ -502,3 +505,4 @@ describe("runOnce – reconciliation flow", () => {
     expect(slack.notifications[0].reason).toMatch(/OrderNotYetFilled inconsistency/);
   });
 });
+
