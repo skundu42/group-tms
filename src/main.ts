@@ -1,8 +1,11 @@
 import {runAll, discoverApps, runApp} from "./apps/manager";
 import {resolve} from "path";
+import {LoggerService} from "./services/loggerService";
+
+const log = new LoggerService(!!process.env.VERBOSE_LOGGING, "main");
 
 function usage() {
-  console.log("Usage: node dist/src/main.js [--app <name>]");
+  log.info("Usage: node dist/src/main.js [--app <name>]");
 }
 
 function main() {
@@ -15,9 +18,9 @@ function main() {
     const apps = discoverApps(resolve(__dirname, "apps"));
     const app = apps.find(a => a.name === appName || a.name === `${appName}`);
     if (!app) {
-      console.error(`App not found: ${appName}`);
+      log.error(`App not found: ${appName}`);
       const names = apps.map(a => a.name).join(", ");
-      console.error(`Available apps: ${names || "<none>"}`);
+      log.error(`Available apps: ${names || "<none>"}`);
       usage();
       process.exit(1);
     }

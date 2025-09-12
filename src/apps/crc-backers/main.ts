@@ -6,7 +6,6 @@ import {BackingInstanceService} from "../../services/backingInstanceService";
 import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
 import {runOnce} from "./logic";
-import {logger} from "bs-logger";
 import {formatErrorWithCauses} from "../../formatError";
 
 // Config
@@ -38,7 +37,7 @@ process.on('SIGTERM', async () => {
   try {
     await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
-    console.error('Failed to send shutdown notification:', error);
+    rootLogger.error('Failed to send shutdown notification:', error);
   }
   process.exit(0);
 });
@@ -47,7 +46,7 @@ process.on('SIGINT', async () => {
   try {
     await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
-    console.error('Failed to send shutdown notification:', error);
+    rootLogger.error('Failed to send shutdown notification:', error);
   }
   process.exit(0);
 });
@@ -140,4 +139,4 @@ async function loop() {
 }
 
 loop();
-logger.info(`Process died.`);
+rootLogger.info(`Process died.`);

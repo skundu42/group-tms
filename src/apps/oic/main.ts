@@ -7,12 +7,12 @@ import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
-const oicGroupAddress = (process.env.OIC_GROUP_ADDRESS || "").toLowerCase();
+const oicGroupAddress = (process.env.OIC_GROUP_ADDRESS || "0x4E2564e5df6C1Fb10C1A018538de36E4D5844DE5").toLowerCase();
 const metaOrgAddress = (process.env.OIC_META_ORG_ADDRESS || "").toLowerCase();
 const affiliateRegistryAddress = (process.env.AFFILIATE_REGISTRY_ADDRESS || "0xca8222e780d046707083f51377b5fd85e2866014").toLowerCase();
 const servicePrivateKey = process.env.OIC_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
-const deployedAtBlock = Number.parseInt(process.env.START_AT_BLOCK || "0");
-const confirmationBlocks = Number.parseInt(process.env.CONFIRMATION_BLOCKS || "2");
+const deployedAtBlock = Number.parseInt(process.env.START_AT_BLOCK || "41734312");
+const confirmationBlocks = Number.parseInt(process.env.CONFIRMATION_BLOCKS || "10");
 const refreshIntervalSec = Number.parseInt(process.env.REFRESH_INTERVAL_SEC || "60");
 const dryRun = process.env.OIC_DRY_RUN === "1";
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
@@ -38,7 +38,7 @@ process.on('SIGTERM', async () => {
   try {
     await slackService.notifySlackStartOrCrash(`🔄 **OIC Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
-    console.error('Failed to send shutdown notification:', error);
+    rootLogger.error('Failed to send shutdown notification:', error);
   }
   process.exit(0);
 });
@@ -47,7 +47,7 @@ process.on('SIGINT', async () => {
   try {
     await slackService.notifySlackStartOrCrash(`🔄 **OIC Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
-    console.error('Failed to send shutdown notification:', error);
+    rootLogger.error('Failed to send shutdown notification:', error);
   }
   process.exit(0);
 });
@@ -56,7 +56,7 @@ process.on('uncaughtException', async (err) => {
   try {
     await slackService.notifySlackStartOrCrash(`💥 Uncaught exception: ${err?.message || err}`);
   } catch {}
-  console.error(err);
+  rootLogger.error(err);
   process.exit(1);
 });
 
@@ -64,7 +64,7 @@ process.on('unhandledRejection', async (reason: any) => {
   try {
     await slackService.notifySlackStartOrCrash(`💥 Unhandled rejection: ${reason?.message || String(reason)}`);
   } catch {}
-  console.error(reason);
+  rootLogger.error(reason);
   process.exit(1);
 });
 

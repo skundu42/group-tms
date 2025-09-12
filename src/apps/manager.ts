@@ -1,6 +1,7 @@
 import {spawn} from "child_process";
 import {resolve} from "path";
 import {readdirSync, statSync, existsSync} from "fs";
+import {LoggerService} from "../services/loggerService";
 
 export type AppConfig = { name: string; entryPath: string; env?: Record<string, string> };
 
@@ -27,15 +28,16 @@ export function runApp(app: AppConfig) {
     env: { ...process.env, ...(app.env || {}) },
   });
 
-  console.log(`[manager] started ${app.name} (pid=${child.pid}) -> ${entryPath}`);
+  const log = new LoggerService(!!process.env.VERBOSE_LOGGING, "manager");
+  log.info(`started ${app.name} (pid=${child.pid}) -> ${entryPath}`);
 
   child.on("exit", (code, signal) => {
     const reason = signal ? `signal ${signal}` : `code ${code}`;
-    console.error(`[manager] ${app.name} exited with ${reason}`);
+    log.error(`${app.name} exited with ${reason}`);
   });
 
   child.on("error", (err) => {
-    console.error(`[manager] failed to start ${app.name}:`, err);
+    log.error(`failed to start ${app.name}:`, err);
   });
 }
 

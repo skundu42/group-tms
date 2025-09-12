@@ -28,7 +28,8 @@ export class SlackService implements ISlackService {
 
   async notifySlackStartOrCrash(message: string): Promise<void> {
     if (!this.webhookUrl) {
-      console.warn(`Slack notification (no webhook configured): ${message}`);
+      const ts = new Date().toISOString();
+      console.warn(`[${ts}]`, `Slack notification (no webhook configured): ${message}`);
       return;
     }
 
