@@ -11,6 +11,7 @@ import {
 } from "../src/interfaces/IBackingInstanceService";
 import {ISlackService} from "../src/interfaces/ISlackService";
 import {ILoggerService} from "../src/interfaces/ILoggerService";
+import {AffiliateGroupChanged, IAffiliateGroupEventsService} from "../src/interfaces/IAffiliateGroupEventsService";
 
 export class FakeLogger implements ILoggerService {
   logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
@@ -112,6 +113,11 @@ export class FakeGroupService implements IGroupService {
     return `0xtrust_${this.calls.length}`;
   }
 
+  async untrustBatch(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
+    this.calls.push({groupAddress, trusteeAddresses: [...trusteeAddresses]});
+    return `0xuntrust_${this.calls.length}`;
+  }
+
   async fetchGroupOwnerAndService(): Promise<any> {
     throw new Error("Not under test");
   }
@@ -152,5 +158,23 @@ export class FakeSlack implements ISlackService {
 
   async notifySlackStartOrCrash(message: string): Promise<void> {
     this.generalNotifications.push(message);
+  }
+}
+
+export class FakeAffiliateGroupEvents implements IAffiliateGroupEventsService {
+  events: AffiliateGroupChanged[] = [];
+
+  async fetchAffiliateGroupChanged(
+    registryAddress: string,
+    targetGroup: string,
+    fromBlock: number,
+    toBlock?: number
+  ): Promise<AffiliateGroupChanged[]> {
+    const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
+    const g = targetGroup.toLowerCase();
+    return this.events.filter(
+      (e) => e.blockNumber >= fromBlock && e.blockNumber <= upper &&
+        (e.oldGroup.toLowerCase() === g || e.newGroup.toLowerCase() === g)
+    );
   }
 }
