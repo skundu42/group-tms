@@ -24,11 +24,15 @@ npm install
 # 2) Configure
 touch .env   # Check the values below and fill in your .env file
 
-# 3) Run (TypeScript directly)
-npx ts-node src/main.ts
+# 3) Run
 
-# Alternative: build then run
-npx tsc && node dist/main.js
+# Option A: build then run with .env
+npx tsc && node --env-file=.env dist/src/main.js
+
+# Option B: use scripts (also load .env)
+npm run start:crc-backers
+npm run start:oic
+npm run start:all
 ```
 
 ## Configuration (.env)

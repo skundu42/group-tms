@@ -12,7 +12,7 @@ export type RunConfig = {
   backingFactoryAddress: string;
   backersGroupAddress: string;
   deployedAtBlock: number;
-  expectedTimeTillCompletion: number; // seconds
+  expectedTimeTillCompletion: number; 
 };
 
 export type Deps = {

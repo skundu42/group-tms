@@ -8,8 +8,9 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "start:crc-backers": "node dist/src/apps/crc-backers/main.js",
-    "start:all": "node dist/src/apps/manager.js",
+    "start:crc-backers": "node --env-file=.env dist/src/apps/crc-backers/main.js",
+    "start:oic": "node --env-file=.env dist/src/apps/oic/main.js",
+    "start:all": "node --env-file=.env dist/src/apps/manager.js",
     "test": "jest --config jest.config.ts",
     "test:coverage": "jest --config jest.config.ts --coverage"
   },

@@ -35,6 +35,22 @@ export class GroupService implements IGroupService {
     return tx.hash;
   }
 
+  async untrustBatch(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
+
+    const provider = new JsonRpcProvider(this.rpcUrl);
+    const wallet = new Wallet(this.servicePrivateKey, provider);
+    const group = new Contract(groupAddress, GROUP_MINI_ABI, wallet);
+
+    const tx = await group.trustBatchWithConditions(trusteeAddresses, 0n);
+    const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      throw new Error(`untrustBatch failed: ${tx.hash}`);
+    }
+
+    return tx.hash;
+  }
+
   async fetchGroupOwnerAndService(groupAddress: string): Promise<GroupOwnerAndServiceAddress> {
     const provider = new JsonRpcProvider(this.rpcUrl);
     const group = new Contract(groupAddress, GROUP_MINI_ABI, provider);
