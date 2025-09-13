@@ -113,10 +113,8 @@ async function executeCoreLogic(
   const metaOrg = cfg.metaOrgAddress.toLowerCase();
 
   // Current trustees snapshots
-  const [metaOrgTrusteesArr, groupTrusteesArr] = await Promise.all([
-    circlesRpc.fetchAllTrustees(metaOrg),
-    circlesRpc.fetchAllTrustees(group),
-  ]);
+  const metaOrgTrusteesArr = await circlesRpc.fetchAllTrustees(metaOrg);
+  const groupTrusteesArr = await circlesRpc.fetchAllTrustees(group);
   const metaOrgTrustees = new Set(metaOrgTrusteesArr.map((x) => x.toLowerCase()));
   const groupTrustees = new Set(groupTrusteesArr.map((x) => x.toLowerCase()));
 
@@ -144,10 +142,11 @@ async function executeCoreLogic(
     const detailFor = (h: string, decision: "trust" | "untrust") => ({
       address: h,
       trustedByMetaOrgTrustee: trustedByAnyMetaOrgTrustee.has(h),
+      hasOicAsAffiliate: affiliates.has(h),
       decision,
     });
     const fmt = (d: ReturnType<typeof detailFor>) =>
-      `address=${d.address} trustedByMetaOrgTrustee=${d.trustedByMetaOrgTrustee} decision=${d.decision}`;
+      `address=${d.address} trustedByMetaOrgTrustee=${d.trustedByMetaOrgTrustee} hasOicAsAffiliate=${d.hasOicAsAffiliate} decision=${d.decision}`;
     if (shouldTrust.length) {
       for (const h of shouldTrust) {
         const d = detailFor(h, "trust");
@@ -248,13 +247,16 @@ export async function runIncremental(
 
     // Apply events to maintain current affiliate set for this group
     processAffiliateEvents(affEvents, group, state.affiliates, state.initialized);
-
-    state.lastSafeHeadScanned = safeHeadBlock;
-    state.initialized = true;
   }
 
   // Execute the core logic
   await executeCoreLogic(deps, cfg, state.affiliates);
+
+  // Only mark the scan range done after a successful run
+  if (fromBlock <= safeHeadBlock) {
+    state.lastSafeHeadScanned = safeHeadBlock;
+    state.initialized = true;
+  }
 }
 
 // Helper function to create initial incremental state
