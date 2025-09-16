@@ -4,6 +4,17 @@ import {ILoggerService} from "../../interfaces/ILoggerService";
 import {IGroupService} from "../../interfaces/IGroupService";
 import {IAffiliateGroupEventsService, AffiliateGroupChanged} from "../../interfaces/IAffiliateGroupEventsService";
 
+export const ALWAYS_TRUSTED_ADDRESSES = [
+  "0xa63abf03d5c6ef8d56e1432277573c47cbe8a8a6", //Bijan
+  "0xf7bd3d83df90b4682725adf668791d4d1499207f", //Armagan
+  "0xf48554937f18885c7f15c432c596b5843648231d", //Paul
+  "0x597400c5982ad5890e799ff43f081c59695a57bd", //Ann
+] as const;
+
+const ALWAYS_TRUSTED_SET = new Set<string>(
+  ALWAYS_TRUSTED_ADDRESSES.map(addr => addr.toLowerCase()),
+);
+
 export type RunConfig = {
   confirmationBlocks: number;
   groupAddress: string;
@@ -124,6 +135,11 @@ async function executeCoreLogic(
     metaOrgTrustees,
     affiliates,
   );
+
+  // Force whitelist addresses to remain trusted regardless of other conditions
+  for (const addr of ALWAYS_TRUSTED_SET) {
+    desired.add(addr);
+  }
 
   // Summary stats requested for each run
   LOG.info(

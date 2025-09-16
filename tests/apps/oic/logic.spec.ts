@@ -1,4 +1,12 @@
-import {runIncremental, runOnce, createInitialIncrementalState, type Deps, type RunConfig, type IncrementalState} from "../../../src/apps/oic/logic";
+import {
+  runIncremental,
+  runOnce,
+  createInitialIncrementalState,
+  ALWAYS_TRUSTED_ADDRESSES,
+  type Deps,
+  type RunConfig,
+  type IncrementalState,
+} from "../../../src/apps/oic/logic";
 import {
   FakeAffiliateGroupEvents,
   FakeChainRpc,
@@ -70,7 +78,12 @@ describe("oic.runOnce", () => {
     // Expect to untrust B and D first; then trust A
     expect(grp.calls.length).toBe(2);
     expect(grp.calls[0].trusteeAddresses.map((x) => x.toLowerCase()).sort()).toEqual([B, D].map(x => x.toLowerCase()).sort());
-    expect(grp.calls[1].trusteeAddresses.map((x) => x.toLowerCase())).toEqual([A.toLowerCase()]);
+    const trusted = grp.calls[1].trusteeAddresses.map((x) => x.toLowerCase()).sort();
+    const expected = [
+      A.toLowerCase(),
+      ...Array.from(ALWAYS_TRUSTED_ADDRESSES, addr => addr.toLowerCase()),
+    ].sort();
+    expect(trusted).toEqual(expected);
   });
 
   it("batches trusts according to outputBatchSize", async () => {
@@ -92,10 +105,12 @@ describe("oic.runOnce", () => {
 
     await runOnce(deps, cfg);
 
-    expect(grp.calls.length).toBe(3);
-    expect(grp.calls[0].trusteeAddresses.length).toBe(50);
-    expect(grp.calls[1].trusteeAddresses.length).toBe(50);
-    expect(grp.calls[2].trusteeAddresses.length).toBe(20);
+    const totalTrusted = addrs.length + ALWAYS_TRUSTED_ADDRESSES.length;
+    expect(grp.calls.length).toBe(Math.ceil(totalTrusted / cfg.outputBatchSize));
+    expect(grp.calls[0].trusteeAddresses.length).toBe(cfg.outputBatchSize);
+    expect(grp.calls[1].trusteeAddresses.length).toBe(cfg.outputBatchSize);
+    const expectedFinalBatch = totalTrusted % cfg.outputBatchSize || cfg.outputBatchSize;
+    expect(grp.calls[2].trusteeAddresses.length).toBe(expectedFinalBatch);
   });
 
   it("dryRun only logs and does not call groupService", async () => {
@@ -115,6 +130,40 @@ describe("oic.runOnce", () => {
 
     await runOnce(deps, cfg);
     expect(grp.calls.length).toBe(0);
+  });
+
+  it("always trusts whitelisted addresses even without meta org coverage", async () => {
+    const deps = makeDeps();
+    const cfg = makeCfg();
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    const grp = deps.groupService as FakeGroupService;
+
+    rpc.trusteesByTruster[META_ORG.toLowerCase()] = [];
+    rpc.trusteesByTruster[GROUP.toLowerCase()] = [];
+
+    await runOnce(deps, cfg);
+
+    const expected = Array.from(ALWAYS_TRUSTED_ADDRESSES, addr => addr.toLowerCase()).sort();
+    expect(grp.calls.length).toBe(1);
+    expect(grp.calls[0].trusteeAddresses.map(x => x.toLowerCase()).sort()).toEqual(expected);
+  });
+
+  it("never untrusts whitelisted addresses", async () => {
+    const deps = makeDeps();
+    const cfg = makeCfg();
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    const grp = deps.groupService as FakeGroupService;
+
+    const whitelist = Array.from(ALWAYS_TRUSTED_ADDRESSES, addr => addr.toLowerCase());
+    const extra = "0xC0FFEE".padEnd(42, "0").toLowerCase();
+
+    rpc.trusteesByTruster[META_ORG.toLowerCase()] = [];
+    rpc.trusteesByTruster[GROUP.toLowerCase()] = [...whitelist, extra];
+
+    await runOnce(deps, cfg);
+
+    expect(grp.calls.length).toBe(1);
+    expect(grp.calls[0].trusteeAddresses.map(x => x.toLowerCase()).sort()).toEqual([extra]);
   });
 });
 
@@ -154,7 +203,13 @@ describe("oic.runIncremental", () => {
     expect(state.lastSafeHeadScanned).toBe(SAFE_HEAD);
     // Group should have trusted A and B
     expect(grp1.calls.length).toBe(1);
-    expect(grp1.calls[0].trusteeAddresses.map(x => x.toLowerCase()).sort()).toEqual([A, B].map(x => x.toLowerCase()).sort());
+    const firstRunTrusted = grp1.calls[0].trusteeAddresses.map(x => x.toLowerCase()).sort();
+    const expectedFirstRun = [
+      A.toLowerCase(),
+      B.toLowerCase(),
+      ...Array.from(ALWAYS_TRUSTED_ADDRESSES, addr => addr.toLowerCase()),
+    ].sort();
+    expect(firstRunTrusted).toEqual(expectedFirstRun);
 
     // Second run: new head, and event that removes B from affiliates
     const deps2 = makeDeps({chainRpc: new FakeChainRpc({blockNumber: HEAD.blockNumber + 20, timestamp: HEAD.timestamp + 20}), affiliateRegistry: aff});
@@ -163,7 +218,11 @@ describe("oic.runIncremental", () => {
     rpc2.trusteesByTruster[A.toLowerCase()] = [A];
     rpc2.trusteesByTruster[B.toLowerCase()] = [B];
     // Simulate group currently trusts both A and B.
-    rpc2.trusteesByTruster[GROUP.toLowerCase()] = [A, B];
+    rpc2.trusteesByTruster[GROUP.toLowerCase()] = [
+      A,
+      B,
+      ...Array.from(ALWAYS_TRUSTED_ADDRESSES),
+    ];
 
     // Add a removal event within the new range
     aff.events.push(mkAffLeave(B, GROUP, {blockNumber: SAFE_HEAD + 10, txHash: "0x3"}));
@@ -193,7 +252,10 @@ describe("oic.runIncremental", () => {
     rpc.trusteesByTruster[META_ORG.toLowerCase()] = [T];
     rpc.trusteesByTruster[T.toLowerCase()] = [A];
     // Group wrongly trusts C; we expect an untrust call for C
-    rpc.trusteesByTruster[GROUP.toLowerCase()] = [C];
+    rpc.trusteesByTruster[GROUP.toLowerCase()] = [
+      C,
+      ...Array.from(ALWAYS_TRUSTED_ADDRESSES),
+    ];
 
     await runIncremental(deps, makeCfg(), state);
 
