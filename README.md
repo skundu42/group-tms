@@ -1,6 +1,6 @@
 # Circles Group Trust Management Service
 
-Two specialized services for Circles protocol trust management:
+Three specialized services for Circles protocol trust management:
 
 ## CRC Backers App
 * Scans Circles **BackingCompleted**/**BackingInitiated** events
@@ -9,6 +9,13 @@ Two specialized services for Circles protocol trust management:
 * Reconciles initiated-but-not-completed processes (resets CowSwap order or creates LBP)
 * Optionally notifies Slack when something looks stuck
 * Runs once a minute
+
+## GP CRC App
+* Scans Circles **RegisterHuman** events for newly registered avatars
+* Cross-checks avatars against the blacklist service and Metri Safe GraphQL data
+* Trusts eligible avatars into the configured group in batches (default 10)
+* Supports dry-run mode and Slack notifications
+* Runs every 10 minutes
 
 ## OIC App  
 * Monitors affiliate group changes and trust relationships
@@ -41,6 +48,7 @@ npx tsc && node --env-file=.env dist/src/main.js
 
 # Option B: use scripts (also load .env)
 npm run start:crc-backers
+npm run start:gp-crc
 npm run start:oic
 npm run start:all
 ```
@@ -71,6 +79,36 @@ SLACK_WEBHOOK_URL=
 
 # Logging
 VERBOSE_LOGGING=1     # any truthy value enables debug/table
+```
+
+### GP CRC App Configuration
+
+```dotenv
+# RPC & addresses
+RPC_URL=https://rpc.aboutcircles.com/
+GP_CRC_GROUP_ADDRESS=0xb629a1e86f3efada0f87c83494da8cc34c3f84ef
+
+# Private key (must control the group's service role unless dry run)
+GP_CRC_SERVICE_PRIVATE_KEY=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+SERVICE_PRIVATE_KEY=                     # Optional fallback for GP_CRC_SERVICE_PRIVATE_KEY
+
+# Metri Safe GraphQL
+METRI_SAFE_GRAPHQL_URL=https://gnosis-e702590.dedicated.hyperindex.xyz/v1/graphql
+METRI_SAFE_API_KEY=                      
+
+# Blacklist service
+BLACKLISTING_SERVICE_URL=https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify
+
+# Scan window / timing
+START_AT_BLOCK=31734312
+CONFIRMATION_BLOCKS=10
+DRY_RUN=0                                 # Set to "1" to skip transactions
+
+# Notifications
+SLACK_WEBHOOK_URL=
+
+# Logging
+VERBOSE_LOGGING=1
 ```
 
 ### OIC App Configuration
@@ -115,6 +153,14 @@ VERBOSE_LOGGING=1     # any truthy value enables debug/table
 * Logs summaries by default; `VERBOSE_LOGGING` prints debug and tables
 * Keeps running: initial run, then every minute
 
+### GP CRC App
+
+* Walks block ranges from `START_AT_BLOCK` to the safe head (`head - CONFIRMATION_BLOCKS`) and fetches `RegisterHuman` events via `circles_events`
+* Deduplicates avatars, checks them against the blacklist in chunks, and verifies a configured Metri Pay safe exists
+* Skips avatars without safes or already trusted in `GP_CRC_GROUP_ADDRESS`; trusts the rest in batches (default 10) with retry logic
+* Supports dry-run logging, verbose logging, and optional Slack notifications for start, shutdown, and errors
+* Runs every 10 minutes
+
 ### OIC App
 
 * Monitors **AffiliateGroupChanged** events for trust relationship updates
@@ -139,6 +185,12 @@ VERBOSE_LOGGING=1     # any truthy value enables debug/table
 * If you change the factory address, bump `START_AT_BLOCK` accordingly
 * Service is stateless and does not store data between runs
 
+### GP CRC App
+* `GP_CRC_GROUP_ADDRESS` must match the group you intend to automatically trust new avatars into
+* Provide `GP_CRC_SERVICE_PRIVATE_KEY` (or `SERVICE_PRIVATE_KEY`) with the group's **service** role unless `DRY_RUN=1`
+* `METRI_SAFE_GRAPHQL_URL` is required; add `METRI_SAFE_API_KEY` if the endpoint is restricted
+* `DRY_RUN=1` will log intended trust batches without submitting transactions
+
 ### OIC App  
 * `OIC_SERVICE_PRIVATE_KEY` (or `SERVICE_PRIVATE_KEY`) must control the OIC group's **service** role
 * `OIC_META_ORG_ADDRESS` is required - this is the MetaOrg whose trustees will be monitored
@@ -149,4 +201,3 @@ VERBOSE_LOGGING=1     # any truthy value enables debug/table
 * The Dockerfile uses `APP_NAME` build argument to determine which app to run
 * Environment variables can be passed directly with `-e` flags instead of using `.env` files
 * The container runs as the `node` user for security
-
