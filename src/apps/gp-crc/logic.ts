@@ -181,7 +181,9 @@ export async function runOnce(
 
     if (avatarsWithoutSafe.length > 0) {
       logger.info(`Skipping ${avatarsWithoutSafe.length} avatar(s) without configured safes.`);
-      logger.debug(`Avatars without safes: ${avatarsWithoutSafe.join(", ")}`);
+      if (dryRun) {
+        logger.debug(`Avatars without safes: ${avatarsWithoutSafe.join(", ")}`);
+      }
     }
   }
 
@@ -205,7 +207,9 @@ export async function runOnce(
       logger.info(
         `Skipping ${alreadyTrustedAvatars.length} avatar(s) already trusted in group ${groupAddress}.`
       );
-      logger.debug(`Already trusted avatars: ${alreadyTrustedAvatars.join(", ")}`);
+      if (dryRun) {
+        logger.debug(`Already trusted avatars: ${alreadyTrustedAvatars.join(", ")}`);
+      }
     }
   }
 

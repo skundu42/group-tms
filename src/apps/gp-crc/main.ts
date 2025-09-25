@@ -87,7 +87,7 @@ void notifySlackStartup();
 
 process.on("SIGINT", async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **gp-crc watcher shutting down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **GP-CRC TMS Service shutting down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -96,7 +96,7 @@ process.on("SIGINT", async () => {
 
 process.on("SIGTERM", async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **gp-crc watcher shutting down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **GP-CRC TMS Service shutting down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -165,13 +165,9 @@ async function notifySlackStartup(): Promise<void> {
     `- RPC: ${rpcUrl}\n` +
     `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
     `- Start Block: ${startAtBlock}\n` +
-    `- Confirmations: ${confirmationBlocks}\n` +
-    `- Event Chunk: ${blockChunkSize}\n` +
-    `- Blacklist Chunk: ${blacklistChunkSize}\n` +
     `- Metri Safe GraphQL: ${metriSafeGraphqlUrl}\n` +
     `- Poll Interval (ms): ${pollIntervalMs}\n` +
     `- Group: ${groupAddress}\n` +
-    `- Group Batch Size: ${groupBatchSize}\n` +
     `- Dry Run: ${dryRun}`;
 
   try {
