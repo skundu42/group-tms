@@ -14,7 +14,7 @@ const servicePrivateKey = process.env.OIC_SERVICE_PRIVATE_KEY || process.env.SER
 const deployedAtBlock = Number.parseInt(process.env.START_AT_BLOCK || "41734312");
 const confirmationBlocks = Number.parseInt(process.env.CONFIRMATION_BLOCKS || "10");
 const refreshIntervalSec = Number.parseInt(process.env.REFRESH_INTERVAL_SEC || "60");
-const dryRun = process.env.OIC_DRY_RUN === "1";
+const dryRun = process.env.DRY_RUN === "1";
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const outputBatchSize = 20;
 

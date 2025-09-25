@@ -1,5 +1,6 @@
 import {CrcV2_CirclesBackingCompleted, CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
 import {CrcV2_Trust} from "@circles-sdk/data";
+import {getAddress} from "ethers";
 import {ICirclesRpc} from "../src/interfaces/ICirclesRpc";
 import {IChainRpc} from "../src/interfaces/IChainRpc";
 import {IBlacklistingService, IBlacklistServiceVerdict} from "../src/interfaces/IBlacklistingService";
@@ -12,6 +13,7 @@ import {
 import {ISlackService} from "../src/interfaces/ISlackService";
 import {ILoggerService} from "../src/interfaces/ILoggerService";
 import {AffiliateGroupChanged, IAffiliateGroupEventsService} from "../src/interfaces/IAffiliateGroupEventsService";
+import {IAvatarSafeService} from "../src/interfaces/IAvatarSafeService";
 
 export class FakeLogger implements ILoggerService {
   logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
@@ -120,6 +122,48 @@ export class FakeGroupService implements IGroupService {
 
   async fetchGroupOwnerAndService(): Promise<any> {
     throw new Error("Not under test");
+  }
+}
+
+export class FakeAvatarSafeService implements IAvatarSafeService {
+  private readonly safeByAvatar: Map<string, string> | null;
+
+  constructor(mapping: Record<string, string> | null = null) {
+    if (mapping === null) {
+      this.safeByAvatar = null;
+      return;
+    }
+
+    this.safeByAvatar = new Map<string, string>();
+    for (const [rawAvatar, safe] of Object.entries(mapping)) {
+      try {
+        const normalized = getAddress(rawAvatar);
+        this.safeByAvatar.set(normalized, safe);
+      } catch {
+        // ignore invalid addresses provided in tests
+      }
+    }
+  }
+
+  async findAvatarsWithSafes(avatars: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    for (const avatar of avatars) {
+      try {
+        const normalized = getAddress(avatar);
+        if (this.safeByAvatar === null) {
+          result.set(normalized, `0xsafe_${normalized.slice(2, 8).toLowerCase()}`);
+          continue;
+        }
+
+        const configured = this.safeByAvatar.get(normalized);
+        if (configured) {
+          result.set(normalized, configured);
+        }
+      } catch {
+        // ignore invalid avatar addresses passed in tests
+      }
+    }
+    return result;
   }
 }
 
