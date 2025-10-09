@@ -18,7 +18,7 @@ type GraphqlResponse = {
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_CHUNK_SIZE = 25;
+const DEFAULT_CHUNK_SIZE = 2500;
 
 const QUERY = `query($addresses:[String!]!){
   Metri_Pay_DelayModule(where:{owners:{ownerAddress:{_in:$addresses}}}){
