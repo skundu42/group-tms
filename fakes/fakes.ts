@@ -108,16 +108,20 @@ export class FakeBlacklist implements IBlacklistingService {
 }
 
 export class FakeGroupService implements IGroupService {
-  calls: { groupAddress: string; trusteeAddresses: string[] }[] = [];
+  calls: { type: "trust" | "untrust"; groupAddress: string; trusteeAddresses: string[] }[] = [];
+  trustCalls = 0;
+  untrustCalls = 0;
 
   async trustBatchWithConditions(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
-    this.calls.push({groupAddress, trusteeAddresses: [...trusteeAddresses]});
-    return `0xtrust_${this.calls.length}`;
+    this.trustCalls += 1;
+    this.calls.push({type: "trust", groupAddress, trusteeAddresses: [...trusteeAddresses]});
+    return `0xtrust_${this.trustCalls}`;
   }
 
   async untrustBatch(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
-    this.calls.push({groupAddress, trusteeAddresses: [...trusteeAddresses]});
-    return `0xuntrust_${this.calls.length}`;
+    this.untrustCalls += 1;
+    this.calls.push({type: "untrust", groupAddress, trusteeAddresses: [...trusteeAddresses]});
+    return `0xuntrust_${this.untrustCalls}`;
   }
 
   async fetchGroupOwnerAndService(): Promise<any> {
