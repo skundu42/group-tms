@@ -109,6 +109,8 @@ describe("gp-crc runOnce", () => {
     expect(outcome.blacklistedAvatars).toEqual([]);
     expect(outcome.trustedAvatars).toEqual([]);
     expect(outcome.trustTxHashes).toEqual([]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
   });
 
   it("throws when configured group address is invalid", async () => {
@@ -176,9 +178,12 @@ describe("gp-crc runOnce", () => {
     expect(outcome.blacklistedAvatars).toEqual([blocked]);
     expect(outcome.trustedAvatars).toEqual([allowed]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
     expect(outcome.newLastProcessedBlock).toBe(145);
     expect(groupService.calls).toHaveLength(1);
     expect(groupService.calls[0]).toEqual({
+      type: "trust",
       groupAddress: cfg.groupAddress,
       trusteeAddresses: [allowed]
     });
@@ -226,8 +231,11 @@ describe("gp-crc runOnce", () => {
 
     expect(outcome.allowedAvatars).toEqual([alreadyTrusted, newAvatar]);
     expect(outcome.trustedAvatars).toEqual([newAvatar]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
     expect(groupService.calls).toHaveLength(1);
     expect(groupService.calls[0]).toEqual({
+      type: "trust",
       groupAddress: cfg.groupAddress,
       trusteeAddresses: [newAvatar]
     });
@@ -276,8 +284,11 @@ describe("gp-crc runOnce", () => {
     expect(outcome.allowedAvatars).toEqual([withSafe, withoutSafe]);
     expect(outcome.trustedAvatars).toEqual([withSafe]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
     expect(groupService.calls).toHaveLength(1);
     expect(groupService.calls[0]).toEqual({
+      type: "trust",
       groupAddress: cfg.groupAddress,
       trusteeAddresses: [withSafe]
     });
@@ -345,6 +356,8 @@ describe("gp-crc runOnce", () => {
     expect(outcome.allowedAvatars).toEqual([avatar]);
     expect(outcome.trustedAvatars).toEqual([avatar]);
     expect(outcome.trustTxHashes).toEqual([]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
     expect(groupService.calls).toHaveLength(0);
   });
 
@@ -380,8 +393,11 @@ describe("gp-crc runOnce", () => {
 
     expect(outcome.allowedAvatars).toEqual([expected]);
     expect(outcome.trustedAvatars).toEqual([expected]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
     expect(groupService.calls).toHaveLength(1);
     expect(groupService.calls[0]).toEqual({
+      type: "trust",
       groupAddress: cfg.groupAddress,
       trusteeAddresses: [expected]
     });
@@ -432,6 +448,8 @@ describe("gp-crc runOnce", () => {
     expect(outcome.allowedAvatars).toEqual([avatar]);
     expect(outcome.trustedAvatars).toEqual([avatar]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
   });
 
   it("retries trust batches on retryable errors before succeeding", async () => {
@@ -469,7 +487,10 @@ describe("gp-crc runOnce", () => {
 
     expect(groupService.attempts).toBe(2);
     expect(outcome.allowedAvatars).toEqual([avatar]);
+    expect(outcome.trustedAvatars).toEqual([avatar]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
   });
 
   it("fails fast when trust batch throws non-retryable error", async () => {
@@ -541,5 +562,89 @@ describe("gp-crc runOnce", () => {
     expect(outcome.allowedAvatars).toEqual([avatar]);
     expect(outcome.trustedAvatars).toEqual([avatar]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.untrustTxHashes).toEqual([]);
+  });
+
+  it("untrusts avatars that become blacklisted", async () => {
+    const avatarInput = "0x4444000000000000000000000000000000000000";
+    const avatar = getAddress(avatarInput);
+
+    const chainRpc = new FakeChainRpc({blockNumber: 150, timestamp: 0});
+    const circlesRpc = new FakeCirclesRpc();
+    const blacklistingService = new FakeBlacklist(new Set([avatarInput.toLowerCase()]));
+    const groupService = new FakeGroupService();
+    const deps = makeDeps({chainRpc, circlesRpc, blacklistingService, groupService});
+    const cfg = makeConfig({
+      startAtBlock: 140,
+      confirmationBlocks: 5,
+      blockChunkSize: 10,
+      blacklistChunkSize: 10
+    });
+
+    circlesRpc.trusteesByTruster[cfg.groupAddress.toLowerCase()] = [avatarInput];
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({result: []})
+    });
+    globalThis.fetch = fetchMock as any;
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.allowedAvatars).toEqual([]);
+    expect(outcome.blacklistedAvatars).toEqual([]);
+    expect(outcome.trustedAvatars).toEqual([]);
+    expect(outcome.trustTxHashes).toEqual([]);
+    expect(outcome.untrustedAvatars).toEqual([avatar]);
+    expect(outcome.untrustTxHashes).toEqual(["0xuntrust_1"]);
+    expect(groupService.calls).toEqual([
+      {
+        type: "untrust",
+        groupAddress: cfg.groupAddress,
+        trusteeAddresses: [avatar]
+      }
+    ]);
+  });
+
+  it("untrusts avatars that no longer have an associated safe", async () => {
+    const avatarInput = "0x5555000000000000000000000000000000000000";
+    const avatar = getAddress(avatarInput);
+
+    const chainRpc = new FakeChainRpc({blockNumber: 150, timestamp: 0});
+    const circlesRpc = new FakeCirclesRpc();
+    const avatarSafeService = new FakeAvatarSafeService({});
+    const groupService = new FakeGroupService();
+    const deps = makeDeps({chainRpc, circlesRpc, avatarSafeService, groupService});
+    const cfg = makeConfig({
+      startAtBlock: 140,
+      confirmationBlocks: 5,
+      blockChunkSize: 10,
+      blacklistChunkSize: 10
+    });
+
+    circlesRpc.trusteesByTruster[cfg.groupAddress.toLowerCase()] = [avatarInput];
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({result: []})
+    });
+    globalThis.fetch = fetchMock as any;
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.allowedAvatars).toEqual([]);
+    expect(outcome.blacklistedAvatars).toEqual([]);
+    expect(outcome.trustedAvatars).toEqual([]);
+    expect(outcome.trustTxHashes).toEqual([]);
+    expect(outcome.untrustedAvatars).toEqual([avatar]);
+    expect(outcome.untrustTxHashes).toEqual(["0xuntrust_1"]);
+    expect(groupService.calls).toEqual([
+      {
+        type: "untrust",
+        groupAddress: cfg.groupAddress,
+        trusteeAddresses: [avatar]
+      }
+    ]);
   });
 });

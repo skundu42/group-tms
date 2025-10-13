@@ -36,6 +36,8 @@ export type RunOutcome = {
   blacklistedAvatars: string[];
   trustedAvatars: string[];
   trustTxHashes: string[];
+  untrustedAvatars: string[];
+  untrustTxHashes: string[];
   newLastProcessedBlock?: number;
 };
 
@@ -72,6 +74,8 @@ const BLACKLIST_FETCH_RETRY_DELAY_MS = 2_000;
 
 const TRUST_BATCH_MAX_ATTEMPTS = 3;
 const TRUST_BATCH_RETRY_DELAY_MS = 1_500;
+const UNTRUST_BATCH_MAX_ATTEMPTS = 3;
+const UNTRUST_BATCH_RETRY_DELAY_MS = 1_500;
 
 export async function runOnce(
   deps: Deps,
@@ -111,6 +115,8 @@ export async function runOnce(
       blacklistedAvatars: [],
       trustedAvatars: [],
       trustTxHashes: [],
+      untrustedAvatars: [],
+      untrustTxHashes: [],
       newLastProcessedBlock: safeHeadBlock
     };
   }
@@ -133,7 +139,25 @@ export async function runOnce(
   const uniqueAvatars = Array.from(new Set(avatars));
   logger.info(`Found ${events.length} RegisterHuman events with ${uniqueAvatars.length} unique avatars.`);
 
-  if (uniqueAvatars.length === 0) {
+  const rawGroupTrustees = await circlesRpc.fetchAllTrustees(groupAddress);
+  const currentTrusteesMap = new Map<string, string>();
+
+  for (const trustee of rawGroupTrustees) {
+    const normalized = normalizeAddress(trustee);
+    if (!normalized) {
+      logger.debug(`Ignoring invalid trustee address returned for group ${groupAddress}: ${trustee}`);
+      continue;
+    }
+    currentTrusteesMap.set(normalized.toLowerCase(), normalized);
+  }
+
+  const evaluationCandidatesMap = new Map<string, string>(currentTrusteesMap);
+  for (const avatar of uniqueAvatars) {
+    evaluationCandidatesMap.set(avatar.toLowerCase(), avatar);
+  }
+  const evaluationCandidates = Array.from(evaluationCandidatesMap.values());
+
+  if (evaluationCandidates.length === 0) {
     logger.info(`No avatars to evaluate against the blacklist.`);
     return {
       fromBlock,
@@ -145,30 +169,39 @@ export async function runOnce(
       blacklistedAvatars: [],
       trustedAvatars: [],
       trustTxHashes: [],
+      untrustedAvatars: [],
+      untrustTxHashes: [],
       newLastProcessedBlock: safeHeadBlock
     };
   }
 
-  const {allowed, blacklisted} = await partitionBlacklistedAddresses(
+  const {allowed: allowedCandidates, blacklisted: blacklistedCandidates} = await partitionBlacklistedAddresses(
     blacklistingService,
-    uniqueAvatars,
+    evaluationCandidates,
     blacklistChunkSize,
     logger
   );
 
   logger.info(
-    `Avatar blacklist summary for [${fromBlock}, ${safeHeadBlock}]: ` +
-    `${uniqueAvatars.length} unique (allowed ${allowed.length}, blacklisted ${blacklisted.length}).`
+    `Avatar evaluation summary for [${fromBlock}, ${safeHeadBlock}]: ` +
+    `${uniqueAvatars.length} new unique avatar(s); evaluated ${evaluationCandidates.length} total ` +
+    `(allowed ${allowedCandidates.length}, blacklisted ${blacklistedCandidates.length}).`
   );
 
-  const eligibleAvatars: string[] = [];
+  const blacklistedLowerSet = new Set(blacklistedCandidates.map((addr) => addr.toLowerCase()));
+  const allowedLowerSet = new Set(allowedCandidates.map((addr) => addr.toLowerCase()));
+
+  const allowedAvatars = uniqueAvatars.filter((avatar) => allowedLowerSet.has(avatar.toLowerCase()));
+  const blacklistedAvatars = uniqueAvatars.filter((avatar) => blacklistedLowerSet.has(avatar.toLowerCase()));
+
+  const eligibleCandidates: string[] = [];
   const avatarsWithoutSafe: string[] = [];
-  if (allowed.length > 0) {
-    logger.info(`Checking configured safes for ${allowed.length} allowed avatar(s).`);
-    const avatarsWithSafes = await avatarSafeService.findAvatarsWithSafes(allowed);
-    for (const avatar of allowed) {
+  if (allowedCandidates.length > 0) {
+    logger.info(`Checking configured safes for ${allowedCandidates.length} allowed avatar(s).`);
+    const avatarsWithSafes = await avatarSafeService.findAvatarsWithSafes(allowedCandidates);
+    for (const avatar of allowedCandidates) {
       if (avatarsWithSafes.has(avatar)) {
-        eligibleAvatars.push(avatar);
+        eligibleCandidates.push(avatar);
       } else {
         avatarsWithoutSafe.push(avatar);
       }
@@ -176,7 +209,7 @@ export async function runOnce(
 
     logger.info(
       `Avatar safe summary for [${fromBlock}, ${safeHeadBlock}]: ` +
-      `${eligibleAvatars.length} with safes, ${avatarsWithoutSafe.length} without safes.`
+      `${eligibleCandidates.length} with safes, ${avatarsWithoutSafe.length} without safes.`
     );
 
     if (avatarsWithoutSafe.length > 0) {
@@ -185,31 +218,66 @@ export async function runOnce(
         logger.debug(`Avatars without safes: ${avatarsWithoutSafe.join(", ")}`);
       }
     }
+  } else {
+    logger.info(`No allowed avatars to verify for safes.`);
   }
 
   const trustedAvatars: string[] = [];
   const trustTxHashes: string[] = [];
+  const untrustedAvatars: string[] = [];
+  const untrustTxHashes: string[] = [];
 
-  let avatarsToTrust: string[] = [];
-  let alreadyTrustedAvatars: string[] = [];
+  const eligibleLowerSet = new Set(eligibleCandidates.map((avatar) => avatar.toLowerCase()));
+  const currentTrustedLowerSet = new Set(currentTrusteesMap.keys());
 
-  if (eligibleAvatars.length > 0) {
-    const partitioned = await partitionAlreadyTrustedAvatars(
-      circlesRpc,
-      groupAddress,
-      eligibleAvatars,
-      logger
+  const avatarsToTrust = eligibleCandidates.filter((avatar) => !currentTrustedLowerSet.has(avatar.toLowerCase()));
+  const avatarsToUntrust = Array.from(currentTrustedLowerSet)
+    .filter((lower) => !eligibleLowerSet.has(lower))
+    .map((lower) => currentTrusteesMap.get(lower))
+    .filter((address): address is string => !!address);
+
+  const alreadyTrustedFromEvents = allowedAvatars
+    .filter((avatar) => eligibleLowerSet.has(avatar.toLowerCase()))
+    .filter((avatar) => currentTrustedLowerSet.has(avatar.toLowerCase()));
+
+  if (alreadyTrustedFromEvents.length > 0) {
+    logger.info(
+      `Skipping ${alreadyTrustedFromEvents.length} avatar(s) already trusted in group ${groupAddress}.`
     );
-    avatarsToTrust = partitioned.toTrust;
-    alreadyTrustedAvatars = partitioned.alreadyTrusted;
+    if (dryRun) {
+      logger.debug(`Already trusted avatars: ${alreadyTrustedFromEvents.join(", ")}`);
+    }
+  }
 
-    if (alreadyTrustedAvatars.length > 0) {
+  if (avatarsToUntrust.length > 0) {
+    const batches = chunkArray(avatarsToUntrust, groupBatchSize);
+    if (dryRun) {
       logger.info(
-        `Skipping ${alreadyTrustedAvatars.length} avatar(s) already trusted in group ${groupAddress}.`
+        `Dry-run mode enabled; would untrust ${avatarsToUntrust.length} avatar(s) in group ${groupAddress} across ${batches.length} batch(es).`
       );
-      if (dryRun) {
-        logger.debug(`Already trusted avatars: ${alreadyTrustedAvatars.join(", ")}`);
+      batches.forEach((batch, index) => {
+        logger.info(`DRY RUN untrust batch ${index + 1}/${batches.length}: ${batch.length} avatars -> ${batch.join(", ")}`);
+      });
+      untrustedAvatars.push(...avatarsToUntrust);
+    } else {
+      logger.info(`Untrusting ${avatarsToUntrust.length} avatar(s) in group ${groupAddress} across ${batches.length} batch(es).`);
+      const concreteGroupService = groupService!;
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        logger.info(`Untrusting batch ${i + 1}/${batches.length} (${batch.length} avatars)...`);
+        const txHash = await untrustBatchWithRetry(
+          concreteGroupService,
+          groupAddress,
+          batch,
+          logger,
+          i + 1,
+          batches.length
+        );
+        logger.info(`  - untrust tx hash: ${txHash}`);
+        untrustTxHashes.push(txHash);
+        untrustedAvatars.push(...batch);
       }
+      logger.info(`Untrusted ${untrustedAvatars.length} avatars in total for group ${groupAddress}.`);
     }
   }
 
@@ -220,7 +288,7 @@ export async function runOnce(
         `Dry-run mode enabled; would trust ${avatarsToTrust.length} avatar(s) in group ${groupAddress} across ${batches.length} batch(es).`
       );
       batches.forEach((batch, index) => {
-        logger.info(`DRY RUN trust batch ${index + 1}/${batches.length}: ${batch.length} avatars.`);
+        logger.info(`DRY RUN trust batch ${index + 1}/${batches.length}: ${batch.length} avatars -> ${batch.join(", ")}`);
       });
       trustedAvatars.push(...avatarsToTrust);
     } else {
@@ -251,10 +319,12 @@ export async function runOnce(
     processed: true,
     eventCount: events.length,
     uniqueAvatarCount: uniqueAvatars.length,
-    allowedAvatars: allowed,
-    blacklistedAvatars: blacklisted,
+    allowedAvatars,
+    blacklistedAvatars,
     trustedAvatars,
     trustTxHashes,
+    untrustedAvatars,
+    untrustTxHashes,
     newLastProcessedBlock: safeHeadBlock
   };
 }
@@ -346,38 +416,6 @@ async function fetchRegisterHumanEvents(
   }
 
   throw new Error("Failed to fetch RegisterHuman events after retries");
-}
-
-async function partitionAlreadyTrustedAvatars(
-  circlesRpc: ICirclesRpc,
-  groupAddress: string,
-  avatars: string[],
-  logger: ILoggerService
-): Promise<{alreadyTrusted: string[]; toTrust: string[]}> {
-  const trustees = await circlesRpc.fetchAllTrustees(groupAddress);
-  const normalizedTrustees = new Set<string>();
-
-  for (const trustee of trustees) {
-    const normalized = normalizeAddress(trustee);
-    if (!normalized) {
-      logger.debug(`Ignoring invalid trustee address returned for group ${groupAddress}: ${trustee}`);
-      continue;
-    }
-    normalizedTrustees.add(normalized.toLowerCase());
-  }
-
-  const alreadyTrusted: string[] = [];
-  const toTrust: string[] = [];
-
-  for (const avatar of avatars) {
-    if (normalizedTrustees.has(avatar.toLowerCase())) {
-      alreadyTrusted.push(avatar);
-    } else {
-      toTrust.push(avatar);
-    }
-  }
-
-  return {alreadyTrusted, toTrust};
 }
 
 type ParseFailureReason = "missing_block_number" | "missing_avatar";
@@ -596,6 +634,32 @@ async function trustBatchWithRetry(
   }
 
   throw new Error("Failed to trust batch after retries");
+}
+
+async function untrustBatchWithRetry(
+  service: IGroupService,
+  groupAddress: string,
+  batch: string[],
+  logger: ILoggerService,
+  currentBatch: number,
+  totalBatches: number
+): Promise<string> {
+  for (let attempt = 1; attempt <= UNTRUST_BATCH_MAX_ATTEMPTS; attempt++) {
+    try {
+      logger.debug(`Untrust batch ${currentBatch}/${totalBatches} attempt ${attempt}/${UNTRUST_BATCH_MAX_ATTEMPTS}.`);
+      return await service.untrustBatch(groupAddress, batch);
+    } catch (error) {
+      const retryable = isRetryableTrustError(error);
+      if (attempt >= UNTRUST_BATCH_MAX_ATTEMPTS || !retryable) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+
+      logger.warn(`Untrust batch ${currentBatch}/${totalBatches} attempt ${attempt} failed (${formatErrorMessage(error)}). Retrying in ${UNTRUST_BATCH_RETRY_DELAY_MS} ms.`);
+      await wait(UNTRUST_BATCH_RETRY_DELAY_MS);
+    }
+  }
+
+  throw new Error("Failed to untrust batch after retries");
 }
 
 async function fetchBlacklistVerdictsWithRetry(

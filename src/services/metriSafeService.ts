@@ -49,11 +49,16 @@ export class MetriSafeService implements IAvatarSafeService {
 
     const requested = new Set(normalized);
     const result = new Map<string, string>();
+    const conflicts = new Set<string>();
 
     for (let index = 0; index < normalized.length; index += this.chunkSize) {
       const chunk = normalized.slice(index, index + this.chunkSize);
       const modules = await this.fetchModules(chunk);
-      this.mergeModules(result, requested, modules);
+      this.mergeModules(result, requested, modules, conflicts);
+    }
+
+    for (const conflictedAvatar of conflicts) {
+      result.delete(conflictedAvatar);
     }
 
     return result;
@@ -112,7 +117,8 @@ export class MetriSafeService implements IAvatarSafeService {
   private mergeModules(
     accumulator: Map<string, string>,
     requested: Set<string>,
-    modules: DelayModule[]
+    modules: DelayModule[],
+    conflicts: Set<string>
   ): void {
     for (const module of modules) {
       const safe = normalizeAddress(module.safeAddress);
@@ -127,6 +133,16 @@ export class MetriSafeService implements IAvatarSafeService {
           continue;
         }
         if (!requested.has(avatar)) {
+          continue;
+        }
+
+        if (conflicts.has(avatar)) {
+          continue;
+        }
+
+        if (accumulator.has(avatar)) {
+          accumulator.delete(avatar);
+          conflicts.add(avatar);
           continue;
         }
 
