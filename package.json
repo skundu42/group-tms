@@ -10,6 +10,7 @@
     "build": "tsc",
     "start:crc-backers": "node --env-file=.env dist/src/apps/crc-backers/main.js",
     "start:gp-crc": "node --env-file=.env dist/src/apps/gp-crc/main.js",
+    "start:gnosis-group": "node --env-file=.env dist/src/apps/gnosis-group/main.js",
     "start:oic": "node --env-file=.env dist/src/apps/oic/main.js",
     "start:all": "node --env-file=.env dist/src/apps/manager.js",
     "test": "jest --config jest.config.ts",

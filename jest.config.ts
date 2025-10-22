@@ -11,6 +11,7 @@ module.exports = {
   collectCoverage: true,
   collectCoverageFrom: [
     "<rootDir>/src/apps/crc-backers/logic.ts",
+    "<rootDir>/src/apps/gnosis-group/logic.ts",
     "<rootDir>/src/apps/oic/logic.ts",
     "<rootDir>/src/apps/gp-crc/logic.ts",
     "<rootDir>/fakes/fakes.ts",

@@ -1,0 +1,333 @@
+import {LoggerService} from "../../services/loggerService";
+import {BlacklistingService} from "../../services/blacklistingService";
+import {CirclesRpcService} from "../../services/circlesRpcService";
+import {GroupService} from "../../services/groupService";
+import {SlackService} from "../../services/slackService";
+import {
+  runOnce,
+  RunConfig,
+  DEFAULT_FETCH_PAGE_SIZE,
+  DEFAULT_BLACKLIST_CHUNK_SIZE,
+  DEFAULT_SCORE_BATCH_SIZE,
+  DEFAULT_SCORE_THRESHOLD,
+  DEFAULT_GROUP_BATCH_SIZE,
+  DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
+  RunOutcome
+} from "./logic";
+import {formatErrorWithCauses} from "../../formatError";
+
+const verboseLogging = !!process.env.VERBOSE_LOGGING;
+const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
+
+const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
+const circlesBackerGroupAddress = process.env.CIRCLES_BACKER_GROUP_ADDRESS || "0x33ef4988f3afd1c9b2cba42862976cae1711d608";
+const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "";
+const servicePrivateKey = process.env.GNOSIS_GROUP_SERVICE_PRIVATE_KEY || "";
+const autoTrustGroupAddressesEnv = process.env.GNOSIS_GROUP_AUTO_TRUST_GROUPS || "";
+const autoTrustGroupAddresses = autoTrustGroupAddressesEnv
+  .split(",")
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
+const dryRun = process.env.DRY_RUN === "1";
+const slackWebhookUrl = process.env.GNOSIS_GROUP_SLACK_WEBHOOK_URL || "";
+const runIntervalMinutes = Math.max(1, parseEnvInt("GNOSIS_GROUP_RUN_INTERVAL_MINUTES", 30));
+const runIntervalMs = runIntervalMinutes * 60 * 1_000;
+
+if (!circlesBackerGroupAddress) {
+  throw new Error("CIRCLES_BACKER_GROUP_ADDRESS is required");
+}
+
+if (!targetGroupAddress) {
+  throw new Error("GNOSIS_GROUP_ADDRESS is required");
+}
+
+const fetchPageSize = parseEnvInt("GNOSIS_GROUP_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
+const blacklistChunkSize = parseEnvInt("GNOSIS_GROUP_BLACKLIST_CHUNK_SIZE", DEFAULT_BLACKLIST_CHUNK_SIZE);
+const scoreBatchSize = parseEnvInt("GNOSIS_GROUP_SCORE_BATCH_SIZE", DEFAULT_SCORE_BATCH_SIZE);
+const scoreThreshold = parseEnvNumber("GNOSIS_GROUP_SCORE_THRESHOLD", DEFAULT_SCORE_THRESHOLD);
+const groupBatchSize = parseEnvInt("GNOSIS_GROUP_BATCH_SIZE", DEFAULT_GROUP_BATCH_SIZE);
+
+const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
+const circlesRpc = new CirclesRpcService(rpcUrl);
+const slackService = new SlackService(slackWebhookUrl);
+const slackConfigured = slackWebhookUrl.trim().length > 0;
+
+const runLogger = rootLogger.child("run");
+let groupService: GroupService | undefined;
+
+if (!dryRun && servicePrivateKey.trim().length === 0) {
+  throw new Error("GNOSIS_GROUP_SERVICE_PRIVATE_KEY (or SERVICE_PRIVATE_KEY) is required when not running gnosis-group in dry-run mode");
+}
+
+if (!dryRun) {
+  groupService = new GroupService(rpcUrl, servicePrivateKey);
+}
+
+const config: RunConfig = {
+  rpcUrl,
+  scoringServiceUrl,
+  circlesBackerGroupAddress,
+  targetGroupAddress,
+  autoTrustGroupAddresses,
+  fetchPageSize,
+  blacklistChunkSize,
+  scoreBatchSize,
+  scoreThreshold,
+  groupBatchSize,
+  dryRun
+};
+
+rootLogger.info("Starting gnosis-group run with config:");
+rootLogger.info(`  - rpcUrl=${rpcUrl}`);
+rootLogger.info(`  - scoringServiceUrl=${scoringServiceUrl}`);
+rootLogger.info(`  - circlesBackerGroupAddress=${circlesBackerGroupAddress}`);
+rootLogger.info(`  - targetGroupAddress=${targetGroupAddress}`);
+rootLogger.info(`  - fetchPageSize=${fetchPageSize}`);
+rootLogger.info(`  - blacklistChunkSize=${blacklistChunkSize}`);
+rootLogger.info(`  - scoreBatchSize=${scoreBatchSize}`);
+rootLogger.info(`  - scoreThreshold=${scoreThreshold}`);
+rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
+rootLogger.info(`  - autoTrustGroupAddresses=${autoTrustGroupAddresses.length > 0 ? autoTrustGroupAddresses.join(",") : "[] (using defaults)"}`);
+rootLogger.info(`  - defaultAutoTrustGroupAddresses=${DEFAULT_AUTO_TRUST_GROUP_ADDRESSES.join(",")}`);
+rootLogger.info(`  - servicePrivateKeyConfigured=${servicePrivateKey.trim().length > 0}`);
+rootLogger.info(`  - dryRun=${dryRun}`);
+rootLogger.info(`  - runIntervalMinutes=${runIntervalMinutes}`);
+rootLogger.info(`  - slackConfigured=${slackConfigured}`);
+
+void notifySlackStartup();
+
+process.on("SIGINT", async () => {
+  await notifySlackShutdown("SIGINT");
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  await notifySlackShutdown("SIGTERM");
+  process.exit(0);
+});
+
+process.on("uncaughtException", async (error) => {
+  rootLogger.error("Uncaught exception:", formatErrorWithCauses(error instanceof Error ? error : new Error(String(error))));
+  await notifySlackFatal(error instanceof Error ? error : new Error(String(error)));
+  process.exit(1);
+});
+
+process.on("unhandledRejection", async (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  rootLogger.error("Unhandled rejection:", formatErrorWithCauses(error));
+  await notifySlackFatal(error);
+  process.exit(1);
+});
+
+async function mainLoop(): Promise<void> {
+  while (true) {
+    const runStartedAt = Date.now();
+    try {
+      const outcome = await runOnce(
+        {
+          blacklistingService,
+          circlesRpc,
+          groupService,
+          logger: runLogger
+        },
+        config
+      );
+
+      rootLogger.info(
+        `Run completed. Addresses with relative score > ${outcome.threshold}: ${outcome.aboveThresholdCount}`
+      );
+      await notifySlackRunSummary(outcome);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      rootLogger.error("gnosis-group run failed:");
+      rootLogger.error(formatErrorWithCauses(error));
+      await notifySlackRunError(error);
+    }
+
+    const elapsedMs = Date.now() - runStartedAt;
+    const waitMs = Math.max(0, runIntervalMs - elapsedMs);
+    if (waitMs > 0) {
+      rootLogger.info(`Waiting ${(waitMs / 60_000).toFixed(1)} minute(s) before the next run.`);
+      await delay(waitMs);
+    } else {
+      rootLogger.info("Run interval elapsed; starting next run immediately.");
+    }
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function parseEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw || raw.trim().length === 0) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) {
+    rootLogger.warn(`Invalid integer for ${name}='${raw}', using fallback ${fallback}.`);
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function parseEnvNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw || raw.trim().length === 0) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) {
+    rootLogger.warn(`Invalid number for ${name}='${raw}', using fallback ${fallback}.`);
+    return fallback;
+  }
+
+  return parsed;
+}
+
+mainLoop().catch((cause) => {
+  const error = cause instanceof Error ? cause : new Error(String(cause));
+  rootLogger.error("gnosis-group run encountered an unrecoverable error:");
+  rootLogger.error(formatErrorWithCauses(error));
+  void notifySlackFatal(error);
+  process.exitCode = 1;
+});
+
+async function notifySlackStartup(): Promise<void> {
+  const header = dryRun
+    ? "🧪 **Gnosis Group Service Started (dry-run)**"
+    : "✅ **Gnosis Group Service Started**";
+  const message =
+    `${header}\n\n` +
+    `- RPC: ${rpcUrl}\n` +
+    `- Scoring Service: ${scoringServiceUrl}\n` +
+    `- Backers Group: ${circlesBackerGroupAddress}\n` +
+    `- Gnosis Group: ${targetGroupAddress}\n` +
+    `- Score Threshold: ${scoreThreshold}\n` +
+    `- Run Interval (min): ${runIntervalMinutes}\n` +
+    `- Slack Configured: ${slackConfigured}`;
+
+  try {
+    await slackService.notifySlackStartOrCrash(message);
+    if (slackConfigured) {
+      rootLogger.info("Slack startup notification sent.");
+    } else {
+      rootLogger.info("Slack startup notification skipped (no webhook configured).");
+    }
+  } catch (error) {
+    rootLogger.warn("Failed to send Slack startup notification:", error);
+  }
+}
+
+async function notifySlackShutdown(signal: NodeJS.Signals): Promise<void> {
+  try {
+    await slackService.notifySlackStartOrCrash(`🔄 **Gnosis Group Service shutting down**\n\nReceived ${signal}.`);
+  } catch (error) {
+    rootLogger.warn("Failed to send Slack shutdown notification:", error);
+  }
+}
+
+async function notifySlackRunSummary(outcome: RunOutcome): Promise<void> {
+  const hasExecutedTx = outcome.trustTxHashes.length > 0 || outcome.untrustTxHashes.length > 0;
+  const hasPlannedChanges = dryRun && (outcome.addressesQueuedForTrust.length > 0 || outcome.addressesToUntrust.length > 0);
+
+  if (!hasExecutedTx && !hasPlannedChanges) {
+    return;
+  }
+
+  const header = dryRun
+    ? "🧪 **Gnosis Group Dry-Run Summary**"
+    : "✅ **Gnosis Group Run Summary**";
+
+  const lines: string[] = [
+    header,
+    "",
+    `- Target Group: ${outcome.targetGroupAddress}`,
+    `- Mode: ${dryRun ? "Dry Run" : "Live"}`,
+    `- Above Threshold (> ${outcome.threshold}): ${outcome.aboveThresholdCount}`,
+    `- Allowed Avatars (post-blacklist): ${outcome.allowedAvatars.length}`,
+    `- Auto-Trusted via configured groups: ${outcome.addressesAutoTrustedByGroups.length}`
+  ];
+
+  if (outcome.blacklistedAvatars.length > 0) {
+    lines.push(`- Blacklisted this run: ${outcome.blacklistedAvatars.length}`);
+  }
+
+  const trustBullet = formatAddressBullet(dryRun ? "Would trust" : "Trusted", outcome.addressesQueuedForTrust, 10);
+  if (trustBullet) {
+    lines.push(trustBullet);
+  }
+
+  if (!dryRun && outcome.trustTxHashes.length > 0) {
+    lines.push(formatTxBullet("Trust tx", outcome.trustTxHashes, 5));
+  }
+
+  const untrustBullet = formatAddressBullet(dryRun ? "Would untrust" : "Untrusted", outcome.addressesToUntrust, 10);
+  if (untrustBullet) {
+    lines.push(untrustBullet);
+  }
+
+  if (!dryRun && outcome.untrustTxHashes.length > 0) {
+    lines.push(formatTxBullet("Untrust tx", outcome.untrustTxHashes, 5));
+  }
+
+  try {
+    await slackService.notifySlackStartOrCrash(lines.join("\n"));
+    if (slackConfigured) {
+      rootLogger.info("Slack run summary notification sent.");
+    }
+  } catch (error) {
+    rootLogger.warn("Failed to send Slack run summary notification:", error);
+  }
+}
+
+async function notifySlackRunError(error: Error): Promise<void> {
+  const message = `⚠️ **Gnosis Group run failed**\n\n${error.message}`;
+  try {
+    await slackService.notifySlackStartOrCrash(message);
+    if (slackConfigured) {
+      rootLogger.info("Slack run error notification sent.");
+    }
+  } catch (slackError) {
+    rootLogger.warn("Failed to send Slack run error notification:", slackError);
+  }
+}
+
+async function notifySlackFatal(error: Error): Promise<void> {
+  const message = `🚨 **Gnosis Group Service crashed**\n\n${error.message}`;
+  try {
+    await slackService.notifySlackStartOrCrash(message);
+  } catch (slackError) {
+    rootLogger.warn("Failed to send Slack fatal notification:", slackError);
+  }
+}
+
+function formatAddressBullet(label: string, addresses: string[], limit: number): string {
+  if (addresses.length === 0) {
+    return "";
+  }
+
+  const shown = addresses.slice(0, limit);
+  const remaining = addresses.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${remaining} more)` : "";
+  return `- ${label} (${addresses.length}): ${shown.join(", ")}${suffix}`;
+}
+
+function formatTxBullet(label: string, txHashes: string[], limit: number): string {
+  if (txHashes.length === 0) {
+    return "";
+  }
+
+  const shown = txHashes.slice(0, limit);
+  const remaining = txHashes.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${remaining} more)` : "";
+  return `- ${label} hash(es): ${shown.join(", ")}${suffix}`;
+}
