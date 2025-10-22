@@ -24,7 +24,7 @@ const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
 const circlesBackerGroupAddress = process.env.CIRCLES_BACKER_GROUP_ADDRESS || "0x33ef4988f3afd1c9b2cba42862976cae1711d608";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "";
-const servicePrivateKey = process.env.GNOSIS_GROUP_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
+const servicePrivateKey = process.env.GNOSIS_GROUP_SERVICE_PRIVATE_KEY || "";
 const autoTrustGroupAddressesEnv = process.env.GNOSIS_GROUP_AUTO_TRUST_GROUPS || "";
 const autoTrustGroupAddresses = autoTrustGroupAddressesEnv
   .split(",")
@@ -210,12 +210,9 @@ async function notifySlackStartup(): Promise<void> {
     `- RPC: ${rpcUrl}\n` +
     `- Scoring Service: ${scoringServiceUrl}\n` +
     `- Backers Group: ${circlesBackerGroupAddress}\n` +
-    `- Target Group: ${targetGroupAddress}\n` +
-    `- Fetch Page Size: ${fetchPageSize}\n` +
+    `- Gnosis Group: ${targetGroupAddress}\n` +
     `- Score Threshold: ${scoreThreshold}\n` +
-    `- Group Batch Size: ${groupBatchSize}\n` +
     `- Run Interval (min): ${runIntervalMinutes}\n` +
-    `- Auto Trust Groups: ${autoTrustGroupAddresses.length > 0 ? autoTrustGroupAddresses.join(", ") : "default set"}\n` +
     `- Slack Configured: ${slackConfigured}`;
 
   try {
