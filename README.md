@@ -139,6 +139,28 @@ SLACK_WEBHOOK_URL=
 VERBOSE_LOGGING=1     # any truthy value enables debug/table
 ```
 
+### Gnosis Group App Configuration
+
+```dotenv
+# RPC & addresses
+RPC_URL=https://rpc.aboutcircles.com/
+CIRCLES_BACKER_GROUP_ADDRESS=0x33ef4988f3afd1c9b2cba42862976cae1711d608
+
+# External services
+BLACKLISTING_SERVICE_URL=https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify
+GNOSIS_GROUP_SCORING_URL=https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch
+
+# Operation mode
+GNOSIS_GROUP_DRY_RUN=0                 # Set to "1" to skip blacklist & scoring requests
+
+# Notifications
+GNOSIS_GROUP_SLACK_WEBHOOK_URL=        # Optional override; falls back to SLACK_WEBHOOK_URL
+SLACK_WEBHOOK_URL=
+
+# Logging
+VERBOSE_LOGGING=1
+```
+
 ## What each app does
 
 ### CRC Backers App
@@ -196,6 +218,11 @@ VERBOSE_LOGGING=1     # any truthy value enables debug/table
 * `OIC_META_ORG_ADDRESS` is required - this is the MetaOrg whose trustees will be monitored
 * Use `OIC_DRY_RUN=1` for testing without making actual blockchain transactions
 * Service maintains incremental state to avoid re-processing old events
+
+### Gnosis Group App
+* Fetches registered human avatars and filters out blacklisted addresses
+* Calls a relative trust scoring service to rank avatars by configured targets
+* `GNOSIS_GROUP_DRY_RUN=1` (or `DRY_RUN=1`) skips blacklist and scoring service calls while logging the batches that would be requested
 
 ### Docker Notes
 * The Dockerfile uses `APP_NAME` build argument to determine which app to run
