@@ -14,6 +14,7 @@ module.exports = {
     "<rootDir>/src/apps/gnosis-group/logic.ts",
     "<rootDir>/src/apps/oic/logic.ts",
     "<rootDir>/src/apps/gp-crc/logic.ts",
+    "<rootDir>/src/apps/router-tms/logic.ts",
     "<rootDir>/fakes/fakes.ts",
     "!<rootDir>/src/main.ts",
     "!**/*.d.ts",

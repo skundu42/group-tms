@@ -14,6 +14,7 @@ import {ISlackService} from "../src/interfaces/ISlackService";
 import {ILoggerService} from "../src/interfaces/ILoggerService";
 import {AffiliateGroupChanged, IAffiliateGroupEventsService} from "../src/interfaces/IAffiliateGroupEventsService";
 import {IAvatarSafeService} from "../src/interfaces/IAvatarSafeService";
+import {IRouterService} from "../src/interfaces/IRouterService";
 
 export class FakeLogger implements ILoggerService {
   logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
@@ -60,6 +61,7 @@ export class FakeCirclesRpc implements ICirclesRpc {
   completed: CrcV2_CirclesBackingCompleted[] = [];
   trusts: CrcV2_Trust[] = [];
   trusteesByTruster: Record<string, string[]> = {};
+  baseGroups: string[] = [];
 
   async fetchBackingInitiatedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingInitiated[]> {
     const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
@@ -73,6 +75,10 @@ export class FakeCirclesRpc implements ICirclesRpc {
 
   async fetchAllTrustees(truster: string): Promise<string[]> {
     return this.trusteesByTruster[truster.toLowerCase()] ?? [];
+  }
+
+  async fetchAllBaseGroups(_pageSize?: number): Promise<string[]> {
+    return this.baseGroups;
   }
 }
 
@@ -224,5 +230,29 @@ export class FakeAffiliateGroupEvents implements IAffiliateGroupEventsService {
       (e) => e.blockNumber >= fromBlock && e.blockNumber <= upper &&
         (e.oldGroup.toLowerCase() === g || e.newGroup.toLowerCase() === g)
     );
+  }
+}
+
+export class FakeRouterService implements IRouterService {
+  calls: { baseGroup: string; crcAddresses: string[] }[] = [];
+  txHashes: string[] = [];
+  private readonly responseQueue: string[];
+  failWith?: Error;
+
+  constructor(txHashResponses: string[] = []) {
+    this.responseQueue = [...txHashResponses];
+  }
+
+  async enableCRCForRouting(baseGroup: string, crcAddresses: string[]): Promise<string> {
+    this.calls.push({baseGroup, crcAddresses: [...crcAddresses]});
+    if (this.failWith) {
+      throw this.failWith;
+    }
+
+    const txHash = this.responseQueue.length > 0
+      ? this.responseQueue.shift()!
+      : `0xtx_${this.calls.length}`;
+    this.txHashes.push(txHash);
+    return txHash;
   }
 }

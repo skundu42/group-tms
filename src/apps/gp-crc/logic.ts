@@ -769,3 +769,7 @@ function formatErrorMessage(error: unknown): string {
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+export const __testables = {
+  timedFetch
+};
