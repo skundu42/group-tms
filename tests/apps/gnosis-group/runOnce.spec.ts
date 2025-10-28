@@ -477,6 +477,113 @@ describe("gnosis-group runOnce", () => {
     expect(outcome.untrustBatches).toEqual([[stale]]);
   });
 
+  it("logs dry-run untrust batches when stale trustees remain", async () => {
+    const stale = getAddress("0xc00000000000000000000000000000000000000c");
+    const active = getAddress("0xd00000000000000000000000000000000000000d");
+
+    registerHumanPages = [[active]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    circlesRpc.trusteesByTruster[circlesBackerGroup.toLowerCase()] = [trustedTarget];
+    circlesRpc.trusteesByTruster[targetGroup.toLowerCase()] = [stale];
+
+    const deps: Deps = {
+      blacklistingService: new FakeBlacklist(),
+      circlesRpc,
+      logger: new FakeLogger(true)
+    };
+
+    const cfg: RunConfig = {
+      rpcUrl: "https://rpc.local",
+      scoringServiceUrl: "https://scores.local",
+      circlesBackerGroupAddress: circlesBackerGroup,
+      targetGroupAddress: targetGroup,
+      dryRun: true,
+      scoreThreshold: 50,
+      scoreBatchSize: 10,
+      blacklistChunkSize: 5,
+      groupBatchSize: 1
+    };
+
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        status: "success",
+        batches: {
+          "0": [{address: active, relative_score: 80}]
+        }
+      })
+    });
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.addressesToUntrust).toEqual([stale]);
+    expect(outcome.untrustBatches).toEqual([[stale]]);
+    expect(outcome.untrustTxHashes).toEqual([]);
+  });
+
+  it("summarizes failed untrust batches after exhausting retries", async () => {
+    const stale = getAddress("0xe00000000000000000000000000000000000000e");
+    const active = getAddress("0xf00000000000000000000000000000000000000f");
+
+    registerHumanPages = [[active]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    circlesRpc.trusteesByTruster[circlesBackerGroup.toLowerCase()] = [trustedTarget];
+    circlesRpc.trusteesByTruster[targetGroup.toLowerCase()] = [stale];
+
+    const groupService = new FlakyGroupService();
+    groupService.setUntrustFailure(targetGroup, [stale], 5);
+
+    const deps: Deps = {
+      blacklistingService: new FakeBlacklist(),
+      circlesRpc,
+      logger: new FakeLogger(true),
+      groupService
+    };
+
+    const cfg: RunConfig = {
+      rpcUrl: "https://rpc.local",
+      scoringServiceUrl: "https://scores.local",
+      circlesBackerGroupAddress: circlesBackerGroup,
+      targetGroupAddress: targetGroup,
+      dryRun: false,
+      scoreThreshold: 50,
+      scoreBatchSize: 10,
+      blacklistChunkSize: 5,
+      groupBatchSize: 1
+    };
+
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        status: "success",
+        batches: {
+          "0": [{address: active, relative_score: 90}]
+        }
+      })
+    });
+
+    jest.useFakeTimers();
+    try {
+      const runPromise = runOnce(deps, cfg);
+      const expectation = expect(runPromise).rejects.toThrow(/Failed to process 1 group batch/);
+      await jest.runOnlyPendingTimersAsync();
+      await jest.runOnlyPendingTimersAsync();
+      await jest.runOnlyPendingTimersAsync();
+      await expectation;
+      expect(groupService.untrustAttempts).toBeGreaterThanOrEqual(3);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("throws when configured target group address is invalid", async () => {
     const deps: Deps = {
       blacklistingService: new FakeBlacklist(),

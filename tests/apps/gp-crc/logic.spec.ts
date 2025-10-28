@@ -361,6 +361,53 @@ describe("gp-crc runOnce", () => {
     expect(groupService.calls).toHaveLength(0);
   });
 
+  it("logs dry-run untrust batches when stale trustees remain", async () => {
+    const staleInput = "0xdddd000000000000000000000000000000000000";
+    const stale = getAddress(staleInput);
+    const activeInput = "0xeeee000000000000000000000000000000000000";
+    const active = getAddress(activeInput);
+
+    const chainRpc = new FakeChainRpc({blockNumber: 150, timestamp: 0});
+    const avatarSafeService = new FakeAvatarSafeService({
+      [activeInput]: "0xsafe_active"
+    });
+    const circlesRpc = new FakeCirclesRpc();
+
+    const deps = makeDeps({chainRpc, avatarSafeService, circlesRpc});
+    const cfg = makeConfig({
+      startAtBlock: 140,
+      confirmationBlocks: 5,
+      blockChunkSize: 10,
+      blacklistChunkSize: 10,
+      dryRun: true,
+      groupBatchSize: 1
+    });
+
+    circlesRpc.trusteesByTruster[cfg.groupAddress.toLowerCase()] = [staleInput];
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        result: [
+          {
+            blockNumber: 141,
+            values: {avatar: activeInput},
+            transactionHash: "0x1"
+          }
+        ]
+      })
+    });
+    globalThis.fetch = fetchMock as any;
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.allowedAvatars).toEqual([active]);
+    expect(outcome.trustedAvatars).toEqual([active]);
+    expect(outcome.trustTxHashes).toEqual([]);
+    expect(outcome.untrustedAvatars).toEqual([stale]);
+    expect(outcome.untrustTxHashes).toEqual([]);
+  });
+
   it("accepts mixed-case avatar addresses", async () => {
     const uppercase = "0xAAAA000000000000000000000000000000000000";
     const expected = getAddress(uppercase);

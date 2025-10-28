@@ -160,13 +160,14 @@ mainLoop().catch((cause) => {
 });
 
 async function notifySlackStartup(): Promise<void> {
+  const pollIntervalMinutes = formatMinutes(pollIntervalMs);
   const startupMessage = `✅ **GP-CRC TMS Service started**\n\n` +
     `Monitoring CRC avatars who also have a GP account in Metri.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
     `- Start Block: ${startAtBlock}\n` +
     `- Metri Safe GraphQL: ${metriSafeGraphqlUrl}\n` +
-    `- Poll Interval (ms): ${pollIntervalMs}\n` +
+    `- Poll Interval (minutes): ${pollIntervalMinutes}\n` +
     `- Group: ${groupAddress}\n` +
     `- Dry Run: ${dryRun}`;
 
@@ -190,4 +191,10 @@ async function notifySlackRunError(error: Error): Promise<void> {
   } catch (slackError) {
     rootLogger.warn("Failed to send run error notification to Slack:", slackError);
   }
+}
+
+function formatMinutes(ms: number): string {
+  const minutes = ms / 60_000;
+  const rounded = Math.round(minutes * 100) / 100;
+  return rounded.toString();
 }

@@ -936,3 +936,8 @@ function formatErrorMessage(error: unknown): string {
   }
   return String(error);
 }
+
+export const __testables = {
+  timedFetch,
+  isRetryableFetchError
+};
