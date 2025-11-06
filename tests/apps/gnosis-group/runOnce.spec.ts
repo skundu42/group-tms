@@ -127,7 +127,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: true,
       scoreThreshold: 50,
@@ -189,7 +189,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: true,
       scoreThreshold: 10,
@@ -248,7 +248,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: false,
       scoreThreshold: 10,
@@ -278,8 +278,8 @@ describe("gnosis-group runOnce", () => {
     expect(groupService.trustCalls).toBe(1);
     const call = groupService.calls[0];
     expect(call.groupAddress).toBe(targetGroup);
-    expect(call.trusteeAddresses).toEqual([eligible]);
-    expect(outcome.addressesQueuedForTrust).toEqual([eligible]);
+    expect(call.trusteeAddresses).toEqual([eligible, trustedTarget]);
+    expect(outcome.addressesQueuedForTrust).toEqual([eligible, trustedTarget]);
     expect(outcome.trustTxHashes).toHaveLength(1);
     expect(groupService.untrustCalls).toBe(0);
     expect(outcome.addressesToUntrust).toEqual([]);
@@ -311,7 +311,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: false,
       scoreThreshold: 10,
@@ -345,10 +345,10 @@ describe("gnosis-group runOnce", () => {
       const outcome = await runPromise;
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(groupService.trustAttempts).toBe(4);
-      expect(groupService.successfulTrustBatches).toBe(3);
-      expect(outcome.trustTxHashes).toHaveLength(3);
-      expect(groupService.calls.filter((call) => call.type === "trust")).toHaveLength(3);
+      expect(groupService.trustAttempts).toBe(5);
+      expect(groupService.successfulTrustBatches).toBe(4);
+      expect(outcome.trustTxHashes).toHaveLength(4);
+      expect(groupService.calls.filter((call) => call.type === "trust")).toHaveLength(4);
     } finally {
       jest.useRealTimers();
     }
@@ -377,7 +377,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: false,
       scoreThreshold: 10,
@@ -444,7 +444,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: false,
       scoreThreshold: 50,
@@ -496,7 +496,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: true,
       scoreThreshold: 50,
@@ -548,7 +548,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: false,
       scoreThreshold: 50,
@@ -594,7 +594,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: "not-an-address",
       dryRun: true
     };
@@ -613,7 +613,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: false
     };
@@ -640,7 +640,7 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
       dryRun: true
     };
@@ -679,9 +679,8 @@ describe("gnosis-group runOnce", () => {
     const cfg: RunConfig = {
       rpcUrl: "https://rpc.local",
       scoringServiceUrl: "https://scores.local",
-      circlesBackerGroupAddress: circlesBackerGroup,
+      autoTrustGroupAddresses: [circlesBackerGroup, customAutoTrustGroup],
       targetGroupAddress: targetGroup,
-      autoTrustGroupAddresses: [customAutoTrustGroup],
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
@@ -706,10 +705,10 @@ describe("gnosis-group runOnce", () => {
 
     expect(groupService.trustCalls).toBe(1);
     const trustCall = groupService.calls.find(call => call.type === "trust");
-    expect(trustCall?.trusteeAddresses).toEqual([autoTrusted]);
+    expect(trustCall?.trusteeAddresses).toEqual([autoTrusted, trustedTarget]);
     expect(outcome.addressesAboveThresholdToTrust).toEqual([]);
-    expect(outcome.addressesAutoTrustedByGroups).toEqual([autoTrusted]);
-    expect(outcome.addressesQueuedForTrust).toEqual([autoTrusted]);
+    expect(outcome.addressesAutoTrustedByGroups).toEqual([autoTrusted, trustedTarget]);
+    expect(outcome.addressesQueuedForTrust).toEqual([autoTrusted, trustedTarget]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
     expect(outcome.untrustTxHashes).toEqual([]);
   });
