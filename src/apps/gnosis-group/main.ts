@@ -22,22 +22,12 @@ const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
-const circlesBackerGroupAddress = process.env.CIRCLES_BACKER_GROUP_ADDRESS || "0x33ef4988f3afd1c9b2cba42862976cae1711d608";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "";
 const servicePrivateKey = process.env.GNOSIS_GROUP_SERVICE_PRIVATE_KEY || "";
-const autoTrustGroupAddressesEnv = process.env.GNOSIS_GROUP_AUTO_TRUST_GROUPS || "";
-const autoTrustGroupAddresses = autoTrustGroupAddressesEnv
-  .split(",")
-  .map((value) => value.trim())
-  .filter((value) => value.length > 0);
 const dryRun = process.env.DRY_RUN === "1";
 const slackWebhookUrl = process.env.GNOSIS_GROUP_SLACK_WEBHOOK_URL || "";
 const runIntervalMinutes = Math.max(1, parseEnvInt("GNOSIS_GROUP_RUN_INTERVAL_MINUTES", 30));
 const runIntervalMs = runIntervalMinutes * 60 * 1_000;
-
-if (!circlesBackerGroupAddress) {
-  throw new Error("CIRCLES_BACKER_GROUP_ADDRESS is required");
-}
 
 if (!targetGroupAddress) {
   throw new Error("GNOSIS_GROUP_ADDRESS is required");
@@ -68,9 +58,7 @@ if (!dryRun) {
 const config: RunConfig = {
   rpcUrl,
   scoringServiceUrl,
-  circlesBackerGroupAddress,
   targetGroupAddress,
-  autoTrustGroupAddresses,
   fetchPageSize,
   blacklistChunkSize,
   scoreBatchSize,
@@ -82,14 +70,12 @@ const config: RunConfig = {
 rootLogger.info("Starting gnosis-group run with config:");
 rootLogger.info(`  - rpcUrl=${rpcUrl}`);
 rootLogger.info(`  - scoringServiceUrl=${scoringServiceUrl}`);
-rootLogger.info(`  - circlesBackerGroupAddress=${circlesBackerGroupAddress}`);
 rootLogger.info(`  - targetGroupAddress=${targetGroupAddress}`);
 rootLogger.info(`  - fetchPageSize=${fetchPageSize}`);
 rootLogger.info(`  - blacklistChunkSize=${blacklistChunkSize}`);
 rootLogger.info(`  - scoreBatchSize=${scoreBatchSize}`);
 rootLogger.info(`  - scoreThreshold=${scoreThreshold}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
-rootLogger.info(`  - autoTrustGroupAddresses=${autoTrustGroupAddresses.length > 0 ? autoTrustGroupAddresses.join(",") : "[] (using defaults)"}`);
 rootLogger.info(`  - defaultAutoTrustGroupAddresses=${DEFAULT_AUTO_TRUST_GROUP_ADDRESSES.join(",")}`);
 rootLogger.info(`  - servicePrivateKeyConfigured=${servicePrivateKey.trim().length > 0}`);
 rootLogger.info(`  - dryRun=${dryRun}`);
@@ -209,7 +195,6 @@ async function notifySlackStartup(): Promise<void> {
     `${header}\n\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Scoring Service: ${scoringServiceUrl}\n` +
-    `- Backers Group: ${circlesBackerGroupAddress}\n` +
     `- Gnosis Group: ${targetGroupAddress}\n` +
     `- Score Threshold: ${scoreThreshold}\n` +
     `- Run Interval (min): ${runIntervalMinutes}\n` +

@@ -26,7 +26,7 @@ describe("computeTrustPlan", () => {
         [normalized3]: 80
       },
       scoreThreshold: 50,
-      guaranteedLowercase: new Set([normalized2.toLowerCase()]),
+      guaranteedAddresses: [normalized2],
       existingTargetGroupAddresses: [normalized3],
       batchSize: 10
     });
@@ -43,14 +43,14 @@ describe("computeTrustPlan", () => {
     const allowed = Array.from({length: 23}, (_, index) => makeAddress(index + 1));
 
     const scores: Record<string, number> = {};
-    const guaranteed = new Set<string>();
+    const guaranteed: string[] = [];
 
     allowed.forEach((addr, index) => {
       const normalized = getAddress(addr);
       const aboveThreshold = index % 2 === 0;
       scores[normalized] = aboveThreshold ? 65 : 35;
       if (!aboveThreshold) {
-        guaranteed.add(normalized.toLowerCase());
+        guaranteed.push(normalized);
       }
     });
 
@@ -58,7 +58,7 @@ describe("computeTrustPlan", () => {
       allowedAvatars: allowed,
       scores,
       scoreThreshold: 50,
-      guaranteedLowercase: guaranteed,
+      guaranteedAddresses: guaranteed,
       existingTargetGroupAddresses: [],
       batchSize: 10
     });
@@ -88,7 +88,7 @@ describe("computeTrustPlan", () => {
         [normalized2]: 10
       },
       scoreThreshold: 50,
-      guaranteedLowercase: new Set([normalized1.toLowerCase()]),
+      guaranteedAddresses: [normalized1],
       existingTargetGroupAddresses: [normalized1, normalized2, normalized3],
       batchSize: 5
     });
@@ -96,5 +96,23 @@ describe("computeTrustPlan", () => {
     expect(plan.addressesQueuedForTrust).toEqual([]);
     expect(plan.addressesToUntrust).toEqual([normalized2, normalized3]);
     expect(plan.untrustBatches).toEqual([[normalized2, normalized3]]);
+  });
+
+  it("queues guaranteed addresses even when absent from allowed avatars", () => {
+    const guaranteedOnly = makeAddress(99);
+    const normalizedGuaranteed = getAddress(guaranteedOnly);
+
+    const plan = computeTrustPlan({
+      allowedAvatars: [],
+      scores: {},
+      scoreThreshold: 50,
+      guaranteedAddresses: [normalizedGuaranteed],
+      existingTargetGroupAddresses: [],
+      batchSize: 5
+    });
+
+    expect(plan.addressesQueuedForTrust).toEqual([normalizedGuaranteed]);
+    expect(plan.addressesAutoTrustedByGroups).toEqual([normalizedGuaranteed]);
+    expect(plan.trustBatches).toEqual([[normalizedGuaranteed]]);
   });
 });

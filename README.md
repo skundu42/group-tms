@@ -144,7 +144,6 @@ VERBOSE_LOGGING=1     # any truthy value enables debug/table
 ```dotenv
 # RPC & addresses
 RPC_URL=https://rpc.aboutcircles.com/
-CIRCLES_BACKER_GROUP_ADDRESS=0x33ef4988f3afd1c9b2cba42862976cae1711d608
 
 # External services
 BLACKLISTING_SERVICE_URL=https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify

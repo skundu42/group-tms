@@ -29,7 +29,6 @@ type RelativeTrustScoreResponse = {
 export type RunConfig = {
   rpcUrl: string;
   scoringServiceUrl: string;
-  circlesBackerGroupAddress: string;
   targetGroupAddress: string;
   autoTrustGroupAddresses?: string[];
   fetchPageSize?: number;
@@ -76,8 +75,8 @@ export const DEFAULT_SCORE_BATCH_SIZE = 20;
 export const DEFAULT_SCORE_THRESHOLD = 50;
 export const DEFAULT_GROUP_BATCH_SIZE = 10;
 export const DEFAULT_AUTO_TRUST_GROUP_ADDRESSES = [
-  "0x33ef4988f3afd1c9b2cba42862976cae1711d608",
-  "0xb629a1e86f3efada0f87c83494da8cc34c3f84ef"
+  "0x1aca75e38263c79d9d4f10df0635cc6fcfe6f026",
+  "0xb629a1e86F3eFada0F87C83494Da8Cc34C3F84ef"
 ] as const;
 
 const BLACKLIST_FETCH_MAX_ATTEMPTS = 3;
@@ -103,11 +102,6 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     throw new Error(`Invalid target group address configured: '${cfg.targetGroupAddress}'`);
   }
 
-  const circlesBackerGroupAddress = normalizeAddress(cfg.circlesBackerGroupAddress);
-  if (!circlesBackerGroupAddress) {
-    throw new Error(`Invalid circles backer group address configured: '${cfg.circlesBackerGroupAddress}'`);
-  }
-
   if (!dryRun && !groupService) {
     throw new Error("Group service dependency is required when gnosis-group is not running in dry-run mode");
   }
@@ -123,49 +117,68 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   loggerHuman.info(`Fetched ${humanAvatars.length} human avatar entries (${uniqueHumanAvatars.length} unique).`);
 
   if (uniqueHumanAvatars.length === 0) {
-    logger.info("No human avatars found; skipping scoring.");
-    return {
-      totalHumanAvatars: 0,
-      uniqueHumanAvatars: 0,
-      allowedAvatars: [],
-      blacklistedAvatars: [],
-      trustedTargetCount: 0,
-      scoredAddresses: 0,
-      threshold: scoreThreshold,
-      aboveThresholdCount: 0,
-      scores: {},
-      targetGroupAddress,
-      targetGroupTrusteeCount: 0,
-      addressesAboveThresholdToTrust: [],
-      addressesAutoTrustedByGroups: [],
-      addressesQueuedForTrust: [],
-      trustBatchSize: groupBatchSize,
-      trustBatches: [],
-      trustTxHashes: [],
-      addressesToUntrust: [],
-      untrustBatches: [],
-      untrustTxHashes: []
-    };
+    logger.info("No human avatars found; continuing with trustee validation only.");
   }
+
+  const configuredAutoTrustGroups = cfg.autoTrustGroupAddresses ?? [];
+  const autoTrustGroupAddresses = uniqueNormalizedAddresses([
+    ...DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
+    ...configuredAutoTrustGroups
+  ]);
+
+  if (autoTrustGroupAddresses.length === 0) {
+    throw new Error("No auto-trust group addresses configured.");
+  }
+
+  const autoTrustGroupTrustees = new Map<string, string[]>();
+  const autoTrustedNormalized = new Map<string, string>();
+
+  for (const groupAddress of autoTrustGroupAddresses) {
+    const trusteesRaw = await circlesRpc.fetchAllTrustees(groupAddress);
+    const trustees = uniqueNormalizedAddresses(trusteesRaw);
+    loggerTrust.info(`Fetched ${trustees.length} trusted addresses from auto-trust group ${groupAddress}.`);
+    autoTrustGroupTrustees.set(groupAddress, trustees);
+  }
+
+  const targetGroupTrusteesRaw = await circlesRpc.fetchAllTrustees(targetGroupAddress);
+  const targetGroupTrustees = uniqueNormalizedAddresses(targetGroupTrusteesRaw);
+
+  const blacklistCandidates = new Set<string>();
+  for (const avatar of uniqueHumanAvatars) {
+    blacklistCandidates.add(avatar);
+  }
+  for (const trustee of targetGroupTrustees) {
+    blacklistCandidates.add(trustee);
+  }
+  for (const trustees of autoTrustGroupTrustees.values()) {
+    for (const address of trustees) {
+      blacklistCandidates.add(address);
+    }
+  }
+  const addressesForBlacklistEvaluation = Array.from(blacklistCandidates);
 
   if (dryRun) {
     loggerBlacklist.info(
-      `Dry-run mode enabled; evaluating blacklist for ${uniqueHumanAvatars.length} avatar(s).`
+      `Dry-run mode enabled; evaluating blacklist for ${addressesForBlacklistEvaluation.length} unique address(es).`
     );
-    if (uniqueHumanAvatars.length > 0) {
-      const batches = chunkArray(uniqueHumanAvatars, blacklistChunkSize);
+    if (addressesForBlacklistEvaluation.length > 0) {
+      const batches = chunkArray(addressesForBlacklistEvaluation, blacklistChunkSize);
       loggerBlacklist.debug(
         `Dry-run: evaluating blacklist in ${batches.length} batch(es) of up to ${blacklistChunkSize} address(es).`
       );
     }
   }
 
-  const {allowed: allowedAvatars, blacklisted: blacklistedAvatars} = await partitionBlacklistedAddresses(
+  const {blacklisted: blacklistedAddresses} = await partitionBlacklistedAddresses(
     blacklistingService,
-    uniqueHumanAvatars,
+    addressesForBlacklistEvaluation,
     blacklistChunkSize,
     loggerBlacklist
   );
+  const blacklistedLowercase = new Set(blacklistedAddresses.map((address) => address.toLowerCase()));
+
+  const allowedAvatars = uniqueHumanAvatars.filter((address) => !blacklistedLowercase.has(address.toLowerCase()));
+  const blacklistedAvatars = uniqueHumanAvatars.filter((address) => blacklistedLowercase.has(address.toLowerCase()));
 
   if (dryRun && blacklistedAvatars.length > 0) {
     loggerBlacklist.info(
@@ -177,89 +190,109 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     `Blacklist evaluation complete. Allowed: ${allowedAvatars.length}, blacklisted: ${blacklistedAvatars.length}.`
   );
 
-  if (allowedAvatars.length === 0) {
-    logger.info("No avatars remain after blacklist filtering; skipping scoring.");
-    return {
-      totalHumanAvatars: humanAvatars.length,
-      uniqueHumanAvatars: uniqueHumanAvatars.length,
-      allowedAvatars,
-      blacklistedAvatars,
-      trustedTargetCount: 0,
-      scoredAddresses: 0,
-      threshold: scoreThreshold,
-      aboveThresholdCount: 0,
-      scores: {},
-      targetGroupAddress,
-      targetGroupTrusteeCount: 0,
-      addressesAboveThresholdToTrust: [],
-      addressesAutoTrustedByGroups: [],
-      addressesQueuedForTrust: [],
-      trustBatchSize: groupBatchSize,
-      trustBatches: [],
-      trustTxHashes: [],
-      addressesToUntrust: [],
-      untrustBatches: [],
-      untrustTxHashes: []
-    };
+  for (const [groupAddress, trustees] of autoTrustGroupTrustees.entries()) {
+    const allowedTrustees = trustees.filter((address) => !blacklistedLowercase.has(address.toLowerCase()));
+    const blacklistedTrustees = trustees.filter((address) => blacklistedLowercase.has(address.toLowerCase()));
+
+    if (blacklistedTrustees.length > 0) {
+      loggerBlacklist.warn(
+        `Blacklist service flagged ${blacklistedTrustees.length} address(es) from auto-trust group ${groupAddress}; they will be ignored.`
+      );
+      loggerBlacklist.debug(
+        `Blacklisted trustees for group ${groupAddress}: ${blacklistedTrustees.join(", ")}`
+      );
+    }
+
+    for (const trustee of allowedTrustees) {
+      const lower = trustee.toLowerCase();
+      if (!autoTrustedNormalized.has(lower)) {
+        autoTrustedNormalized.set(lower, trustee);
+      }
+    }
+
+    loggerTrust.info(
+      `Auto-trust group ${groupAddress}: ${allowedTrustees.length} eligible trustee(s) after blacklist (fetched ${trustees.length}).`
+    );
+
+    autoTrustGroupTrustees.set(groupAddress, allowedTrustees);
   }
 
-  const trustedTargetsRaw = await circlesRpc.fetchAllTrustees(circlesBackerGroupAddress);
-  const trustedTargets = uniqueNormalizedAddresses(trustedTargetsRaw);
-
-  logger.info(`Fetched ${trustedTargets.length} trusted addresses from circles backer group ${circlesBackerGroupAddress}.`);
+  const trustedTargets = Array.from(autoTrustedNormalized.values());
 
   if (trustedTargets.length === 0) {
-    throw new Error(`No trusted addresses found for circles backer group ${circlesBackerGroupAddress}.`);
+    throw new Error("No non-blacklisted trusted addresses found across auto-trust groups.");
+  }
+
+  const blacklistedTargetGroupTrustees = targetGroupTrustees.filter((address) =>
+    blacklistedLowercase.has(address.toLowerCase())
+  );
+  if (blacklistedTargetGroupTrustees.length > 0) {
+    loggerBlacklist.warn(
+      `Blacklist service flagged ${blacklistedTargetGroupTrustees.length} trusted address(es) in target group ${targetGroupAddress}; they will be scheduled for untrust.`
+    );
+    loggerBlacklist.debug(
+      `Blacklisted target group trustees: ${blacklistedTargetGroupTrustees.join(", ")}`
+    );
   }
 
   const scores: Record<string, number> = {};
   let totalScored = 0;
 
-  const scoreBatches = chunkArray(allowedAvatars, scoreBatchSize);
-  if (dryRun) {
-    if (scoreBatches.length === 0) {
-      loggerScores.info("Dry-run mode enabled; no avatars to score.");
-    } else {
-      loggerScores.info(
-        `Dry-run mode enabled; requesting ${scoreBatches.length} relative trust score batch request(s) for ${allowedAvatars.length} avatar(s).`
-      );
-    }
-  }
-
-  for (const [batchIndex, batch] of scoreBatches.entries()) {
+  if (allowedAvatars.length > 0) {
+    const scoreBatches = chunkArray(allowedAvatars, scoreBatchSize);
     if (dryRun) {
-      loggerScores.debug(
-        `Dry-run score batch ${batchIndex + 1}/${scoreBatches.length}: ${batch.length} avatar(s) -> ${batch.join(", ")}.`
-      );
-    } else {
-      loggerScores.debug(`Requesting relative trust scores for batch ${batchIndex + 1}.`);
-    }
-
-    const batchScores = await fetchRelativeTrustScoresWithRetry(
-      cfg.scoringServiceUrl,
-      batch,
-      trustedTargets,
-      loggerScores
-    );
-    for (const [address, score] of batchScores.entries()) {
-      if (!(address in scores)) {
-        totalScored += 1;
+      if (scoreBatches.length === 0) {
+        loggerScores.info("Dry-run mode enabled; no avatars to score.");
+      } else {
+        loggerScores.info(
+          `Dry-run mode enabled; requesting ${scoreBatches.length} relative trust score batch request(s) for ${allowedAvatars.length} avatar(s).`
+        );
       }
-      scores[address] = score;
     }
-  }
 
-  if (totalScored === 0) {
-    if (dryRun) {
-      logger.info("Dry-run mode enabled; relative trust score service returned no scores.");
+    for (const [batchIndex, batch] of scoreBatches.entries()) {
+      if (dryRun) {
+        loggerScores.debug(
+          `Dry-run score batch ${batchIndex + 1}/${scoreBatches.length}: ${batch.length} avatar(s) -> ${batch.join(", ")}.`
+        );
+      } else {
+        loggerScores.debug(`Requesting relative trust scores for batch ${batchIndex + 1}.`);
+      }
+
+      const batchScores = await fetchRelativeTrustScoresWithRetry(
+        cfg.scoringServiceUrl,
+        batch,
+        trustedTargets,
+        loggerScores
+      );
+      for (const [address, score] of batchScores.entries()) {
+        if (!(address in scores)) {
+          totalScored += 1;
+        }
+        scores[address] = score;
+      }
+    }
+
+    if (totalScored === 0) {
+      if (dryRun) {
+        logger.info("Dry-run mode enabled; relative trust score service returned no scores.");
+      } else {
+        logger.warn("Relative trust score service returned no scores.");
+      }
     } else {
-      logger.warn("Relative trust score service returned no scores.");
+      const message = dryRun
+        ? `Dry-run mode enabled; received relative scores for ${totalScored} avatar(s).`
+        : `Received relative scores for ${totalScored} avatars.`;
+      logger.info(message);
     }
   } else {
-    const message = dryRun
-      ? `Dry-run mode enabled; received relative scores for ${totalScored} avatar(s).`
-      : `Received relative scores for ${totalScored} avatars.`;
-    logger.info(message);
+    if (dryRun) {
+      loggerScores.info(
+        "Dry-run mode enabled; skipping scoring because no avatars passed blacklist checks."
+      );
+    } else {
+      logger.info("No avatars remain after blacklist filtering; skipping scoring.");
+    }
   }
 
   let aboveThresholdCount = 0;
@@ -276,32 +309,6 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
 
   logger.info(`Addresses with relative score > ${scoreThreshold}: ${aboveThresholdCount}.`);
 
-  const configuredAutoTrustGroups = cfg.autoTrustGroupAddresses ?? [];
-  const autoTrustGroupAddresses = uniqueNormalizedAddresses([
-    circlesBackerGroupAddress,
-    ...DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
-    ...configuredAutoTrustGroups
-  ]);
-
-  const autoTrustedLowercase = new Set<string>();
-  for (const address of trustedTargets) {
-    autoTrustedLowercase.add(address.toLowerCase());
-  }
-
-  for (const groupAddress of autoTrustGroupAddresses) {
-    if (groupAddress.toLowerCase() === circlesBackerGroupAddress.toLowerCase()) {
-      continue;
-    }
-    const trusteesRaw = await circlesRpc.fetchAllTrustees(groupAddress);
-    const trustees = uniqueNormalizedAddresses(trusteesRaw);
-    loggerTrust.info(`Fetched ${trustees.length} trusted addresses from auto-trust group ${groupAddress}.`);
-    for (const trustee of trustees) {
-      autoTrustedLowercase.add(trustee.toLowerCase());
-    }
-  }
-
-  const targetGroupTrusteesRaw = await circlesRpc.fetchAllTrustees(targetGroupAddress);
-  const targetGroupTrustees = uniqueNormalizedAddresses(targetGroupTrusteesRaw);
   const targetGroupTrusteesLowercase = new Set(targetGroupTrustees.map((addr) => addr.toLowerCase()));
 
   loggerTrust.info(
@@ -312,7 +319,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     allowedAvatars,
     scores,
     scoreThreshold,
-    guaranteedLowercase: autoTrustedLowercase,
+    guaranteedAddresses: Array.from(autoTrustedNormalized.values()),
     existingTargetGroupAddresses: targetGroupTrustees,
     batchSize: groupBatchSize
   });
@@ -490,7 +497,7 @@ type ComputeTrustPlanInput = {
   allowedAvatars: string[];
   scores: Record<string, number>;
   scoreThreshold: number;
-  guaranteedLowercase: Set<string>;
+  guaranteedAddresses: string[];
   existingTargetGroupAddresses: string[];
   batchSize: number;
 };
@@ -513,6 +520,20 @@ export function computeTrustPlan(input: ComputeTrustPlanInput): TrustPlan {
   const queuedLowercase = new Set<string>();
   const satisfiedLowercase = new Set<string>();
   const existingLowercase = new Set<string>();
+  const guaranteedMap = new Map<string, string>();
+
+  for (const candidate of input.guaranteedAddresses) {
+    const normalized = normalizeAddress(candidate);
+    if (!normalized) {
+      continue;
+    }
+    const lower = normalized.toLowerCase();
+    if (!guaranteedMap.has(lower)) {
+      guaranteedMap.set(lower, normalized);
+    }
+  }
+
+  const guaranteedLowercase = new Set(guaranteedMap.keys());
 
   for (const existing of input.existingTargetGroupAddresses) {
     const normalizedExisting = normalizeAddress(existing);
@@ -531,7 +552,7 @@ export function computeTrustPlan(input: ComputeTrustPlanInput): TrustPlan {
     const lower = normalized.toLowerCase();
     const score = getScoreForAddress(input.scores, normalized);
     const aboveThreshold = score > input.scoreThreshold;
-    const guaranteed = input.guaranteedLowercase.has(lower);
+    const guaranteed = guaranteedLowercase.has(lower);
 
     if (!aboveThreshold && !guaranteed) {
       continue;
@@ -553,8 +574,18 @@ export function computeTrustPlan(input: ComputeTrustPlanInput): TrustPlan {
     addressesQueuedForTrust.push(normalized);
   }
 
-  for (const guaranteedLower of input.guaranteedLowercase) {
+  for (const guaranteedLower of guaranteedLowercase) {
     satisfiedLowercase.add(guaranteedLower);
+    if (existingLowercase.has(guaranteedLower) || queuedLowercase.has(guaranteedLower)) {
+      continue;
+    }
+    const normalized = guaranteedMap.get(guaranteedLower);
+    if (!normalized) {
+      continue;
+    }
+    addressesAutoTrustedByGroups.push(normalized);
+    queuedLowercase.add(guaranteedLower);
+    addressesQueuedForTrust.push(normalized);
   }
 
   for (const existing of input.existingTargetGroupAddresses) {
