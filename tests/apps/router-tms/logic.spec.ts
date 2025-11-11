@@ -1,29 +1,61 @@
 import {getAddress} from "ethers";
-import {runOnce, type Deps, type RunConfig} from "../../../src/apps/router-tms/logic";
-import {FakeCirclesRpc, FakeLogger, FakeRouterService} from "../../../fakes/fakes";
+import {
+  runOnce,
+  type Deps,
+  type RunConfig,
+  DEFAULT_BASE_GROUP_ADDRESS
+} from "../../../src/apps/router-tms/logic";
+import {
+  FakeBlacklist,
+  FakeCirclesRpc,
+  FakeLogger,
+  FakeRouterService
+} from "../../../fakes/fakes";
 
 const ROUTER_ADDRESS = "0xDC287474114cC0551a81DdC2EB51783fBF34802F";
 
-const getAvatarInfoBatchMock = jest.fn();
+let registerHumanPages: string[][] = [];
 
 jest.mock("@circles-sdk/data", () => {
-  class CirclesData {
-    constructor(public readonly rpcUrl: string) {}
+  class CirclesRpc {
+    constructor(public readonly url: string) {}
+  }
 
-    getAvatarInfoBatch(...args: unknown[]) {
-      return getAvatarInfoBatchMock(...args);
+  class CirclesQuery<T> {
+    currentPage: {results: T[]} | null = null;
+    private pageIndex = 0;
+
+    constructor(public readonly rpc: CirclesRpc, public readonly options: any) {}
+
+    async queryNextPage(): Promise<boolean> {
+      if (this.pageIndex >= registerHumanPages.length) {
+        return false;
+      }
+
+      const avatars = registerHumanPages[this.pageIndex++];
+      this.currentPage = {
+        results: avatars.map((avatar, index) => ({
+          avatar,
+          blockNumber: 100 + index,
+          transactionIndex: index,
+          logIndex: index
+        })) as unknown as T[]
+      };
+      return true;
     }
   }
 
-  return {CirclesData};
+  return {CirclesRpc, CirclesQuery};
 });
 
 function makeDeps(overrides?: Partial<Deps>): Deps {
   const circlesRpc = new FakeCirclesRpc();
+  const blacklistingService = new FakeBlacklist();
   const logger = new FakeLogger(true);
 
   return {
     circlesRpc,
+    blacklistingService,
     logger,
     ...overrides
   };
@@ -33,19 +65,18 @@ function makeConfig(overrides?: Partial<RunConfig>): RunConfig {
   return {
     rpcUrl: "https://rpc.example",
     routerAddress: ROUTER_ADDRESS,
+    baseGroupAddress: DEFAULT_BASE_GROUP_ADDRESS,
     dryRun: true,
     enableBatchSize: 25,
-    baseGroupPageSize: 50,
-    avatarInfoBatchSize: 50,
+    fetchPageSize: 50,
+    blacklistChunkSize: 50,
     ...overrides
   };
 }
 
-
 describe("router-tms runOnce", () => {
   beforeEach(() => {
-    getAvatarInfoBatchMock.mockReset();
-    getAvatarInfoBatchMock.mockResolvedValue([]);
+    registerHumanPages = [];
   });
 
   it("throws when configured router address is invalid", async () => {
@@ -62,169 +93,66 @@ describe("router-tms runOnce", () => {
     await expect(runOnce(deps, cfg)).rejects.toThrow("Router service dependency is required");
   });
 
-  it("trusts every human CRC trusted by base groups and calls enableCRCForRouting", async () => {
-    const baseGroupOne = getAddress("0x1000000000000000000000000000000000000001");
-    const baseGroupTwo = getAddress("0x1000000000000000000000000000000000000002");
-
+  it("enables routing for every allowed non-blacklisted human avatar", async () => {
+    const baseGroup = getAddress("0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026");
     const humanAlice = getAddress("0x2000000000000000000000000000000000000001");
     const humanBob = getAddress("0x2000000000000000000000000000000000000002");
-    const orgTreasury = getAddress("0x3000000000000000000000000000000000000003");
+    const humanCarol = getAddress("0x2000000000000000000000000000000000000003");
+
+    registerHumanPages = [[humanAlice, humanBob], [humanAlice, humanCarol]];
 
     const circlesRpc = new FakeCirclesRpc();
-    circlesRpc.baseGroups = [baseGroupOne, baseGroupTwo];
-    circlesRpc.trusteesByTruster[baseGroupOne.toLowerCase()] = [humanAlice, orgTreasury, ROUTER_ADDRESS];
-    circlesRpc.trusteesByTruster[baseGroupTwo.toLowerCase()] = [humanAlice, humanBob, ROUTER_ADDRESS];
     circlesRpc.trusteesByTruster[ROUTER_ADDRESS.toLowerCase()] = [humanAlice];
 
-    const humanSet = new Set([humanAlice.toLowerCase(), humanBob.toLowerCase()]);
-    getAvatarInfoBatchMock.mockImplementation(async (avatars: string[]) => {
-      return avatars.map((avatar) => {
-        const lower = avatar.toLowerCase();
-        const isHuman = humanSet.has(lower);
-        return {
-          avatar,
-          isHuman,
-          version: isHuman ? 2 : 1
-        };
-      });
+    const blacklistingService = new FakeBlacklist(new Set([humanCarol.toLowerCase()]));
+    const routerService = new FakeRouterService(["0xtx_enable"]);
+
+    const deps = makeDeps({
+      circlesRpc,
+      blacklistingService,
+      routerService
     });
 
-    const routerService = new FakeRouterService();
-    const deps = makeDeps({circlesRpc, routerService});
     const cfg = makeConfig({
       dryRun: false,
-      avatarInfoBatchSize: 10
+      enableBatchSize: 2,
+      fetchPageSize: 2,
+      blacklistChunkSize: 2,
+      baseGroupAddress: baseGroup
     });
 
     const outcome = await runOnce(deps, cfg);
 
-    expect(outcome.baseGroupCount).toBe(2);
-    expect(outcome.humanTrustCount).toBe(2);
-    expect(outcome.routerTrustCount).toBe(2);
-    expect(outcome.pendingTrustCount).toBe(1);
-    expect(outcome.executedTrustCount).toBe(1);
-    expect(outcome.txHashes).toEqual(["0xtx_1"]);
-    expect(outcome.plans).toEqual([
-      {baseGroup: baseGroupTwo.toLowerCase(), addresses: [humanBob.toLowerCase()]}
-    ]);
+    expect(outcome.totalAvatarEntries).toBe(4);
+    expect(outcome.uniqueHumanCount).toBe(3);
+    expect(outcome.allowedHumanCount).toBe(2);
+    expect(outcome.blacklistedHumanCount).toBe(1);
+    expect(outcome.alreadyTrustedCount).toBe(1);
+    expect(outcome.pendingEnableCount).toBe(1);
+    expect(outcome.executedEnableCount).toBe(1);
+    expect(outcome.txHashes).toEqual(["0xtx_enable"]);
+
     expect(routerService.calls).toEqual([
-      {baseGroup: baseGroupTwo.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]}
+      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]}
     ]);
-    expect(getAvatarInfoBatchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips human avatars that are not v2 before enabling routing", async () => {
-    const baseGroup = getAddress("0x1000000000000000000000000000000000000004");
-    const humanV1 = getAddress("0x2000000000000000000000000000000000000005");
-    const humanV2 = getAddress("0x2000000000000000000000000000000000000006");
+  it("returns pending avatars but skips execution in dry-run mode", async () => {
+    const humanAlice = getAddress("0x2000000000000000000000000000000000000010");
+    const humanBob = getAddress("0x2000000000000000000000000000000000000011");
+
+    registerHumanPages = [[humanAlice, humanBob]];
 
     const circlesRpc = new FakeCirclesRpc();
-    circlesRpc.baseGroups = [baseGroup];
-    circlesRpc.trusteesByTruster[baseGroup.toLowerCase()] = [humanV1, humanV2, ROUTER_ADDRESS];
     circlesRpc.trusteesByTruster[ROUTER_ADDRESS.toLowerCase()] = [];
 
-    const infoMap = new Map([
-      [
-        humanV1.toLowerCase(),
-        {
-          isHuman: true,
-          version: 1
-        }
-      ],
-      [
-        humanV2.toLowerCase(),
-        {
-          isHuman: true,
-          version: 2
-        }
-      ]
-    ]);
-
-    getAvatarInfoBatchMock.mockImplementation(async (avatars: string[]) => {
-      return avatars.map((avatar) => {
-        const lower = avatar.toLowerCase();
-        const info = infoMap.get(lower);
-        return {
-          avatar,
-          isHuman: info?.isHuman ?? false,
-          version: info?.version ?? 1
-        };
-      });
-    });
-
-    const routerService = new FakeRouterService();
-    const deps = makeDeps({circlesRpc, routerService});
-    const cfg = makeConfig({
-      dryRun: false,
-      avatarInfoBatchSize: 10
-    });
+    const deps = makeDeps({circlesRpc});
+    const cfg = makeConfig({dryRun: true});
 
     const outcome = await runOnce(deps, cfg);
 
-    expect(outcome.baseGroupCount).toBe(1);
-    expect(outcome.humanTrustCount).toBe(1);
-    expect(outcome.routerTrustCount).toBe(1);
-    expect(outcome.pendingTrustCount).toBe(1);
-    expect(outcome.executedTrustCount).toBe(1);
-    expect(outcome.txHashes).toEqual(["0xtx_1"]);
-    expect(outcome.plans).toEqual([
-      {
-        baseGroup: baseGroup.toLowerCase(),
-        addresses: [humanV2.toLowerCase()]
-      }
-    ]);
-    expect(routerService.calls).toEqual([
-      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanV2.toLowerCase()]}
-    ]);
-
-    expect(getAvatarInfoBatchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("enables routing even when a base group does not trust the router", async () => {
-    const baseGroup = getAddress("0x1000000000000000000000000000000000000003");
-
-    const humanAlice = getAddress("0x2000000000000000000000000000000000000004");
-
-    const circlesRpc = new FakeCirclesRpc();
-    circlesRpc.baseGroups = [baseGroup];
-    circlesRpc.trusteesByTruster[baseGroup.toLowerCase()] = [humanAlice];
-    circlesRpc.trusteesByTruster[ROUTER_ADDRESS.toLowerCase()] = [];
-
-    getAvatarInfoBatchMock.mockImplementation(async (avatars: string[]) => {
-      return avatars.map((avatar) => {
-        const lower = avatar.toLowerCase();
-        const isHuman = lower === humanAlice.toLowerCase();
-        return {
-          avatar,
-          isHuman,
-          version: isHuman ? 2 : 1
-        };
-      });
-    });
-
-    const routerService = new FakeRouterService();
-    const logger = new FakeLogger(true);
-    const deps = makeDeps({circlesRpc, routerService, logger});
-    const cfg = makeConfig({dryRun: false});
-
-    const outcome = await runOnce(deps, cfg);
-
-    expect(outcome.baseGroupCount).toBe(1);
-    expect(outcome.humanTrustCount).toBe(1);
-    expect(outcome.routerTrustCount).toBe(1);
-    expect(outcome.pendingTrustCount).toBe(1);
-    expect(outcome.executedTrustCount).toBe(1);
-    expect(outcome.txHashes).toEqual(["0xtx_1"]);
-    expect(outcome.plans).toEqual([
-      {
-        baseGroup: baseGroup.toLowerCase(),
-        addresses: [humanAlice.toLowerCase()]
-      }
-    ]);
-    expect(routerService.calls).toEqual([
-      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanAlice.toLowerCase()]}
-    ]);
-    const warnMessages = logger.logs.filter((log) => log.level === "warn").map((log) => String(log.args[0]));
-    expect(warnMessages.length).toBe(0);
+    expect(outcome.pendingEnableCount).toBe(2);
+    expect(outcome.executedEnableCount).toBe(0);
+    expect(outcome.txHashes).toEqual([]);
   });
 });

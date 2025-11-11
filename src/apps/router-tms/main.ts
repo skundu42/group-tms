@@ -2,30 +2,35 @@ import {CirclesRpcService} from "../../services/circlesRpcService";
 import {LoggerService} from "../../services/loggerService";
 import {SlackService} from "../../services/slackService";
 import {RouterService} from "../../services/routerService";
+import {BlacklistingService} from "../../services/blacklistingService";
 import {
   runOnce,
   RunConfig,
   DEFAULT_ENABLE_BATCH_SIZE,
-  DEFAULT_BASE_GROUP_PAGE_SIZE,
-  DEFAULT_AVATAR_INFO_BATCH_SIZE
+  DEFAULT_FETCH_PAGE_SIZE,
+  DEFAULT_BLACKLIST_CHUNK_SIZE,
+  DEFAULT_BASE_GROUP_ADDRESS
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const routerAddress = process.env.ROUTER_ADDRESS || "0xdc287474114cc0551a81ddc2eb51783fbf34802f";
+const baseGroupAddress = process.env.ROUTER_BASE_GROUP_ADDRESS || DEFAULT_BASE_GROUP_ADDRESS;
 const dryRun = process.env.DRY_RUN === "1";
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const pollIntervalMs = parseEnvInt("ROUTER_POLL_INTERVAL_MS", 30 * 60 * 1000);
 const enableBatchSize = parseEnvInt("ROUTER_ENABLE_BATCH_SIZE", DEFAULT_ENABLE_BATCH_SIZE);
-const baseGroupPageSize = parseEnvInt("ROUTER_BASE_GROUP_PAGE_SIZE", DEFAULT_BASE_GROUP_PAGE_SIZE);
-const avatarInfoBatchSize = parseEnvInt("ROUTER_AVATAR_INFO_BATCH_SIZE", DEFAULT_AVATAR_INFO_BATCH_SIZE);
+const fetchPageSize = parseEnvInt("ROUTER_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
+const blacklistChunkSize = parseEnvInt("ROUTER_BLACKLIST_CHUNK_SIZE", DEFAULT_BLACKLIST_CHUNK_SIZE);
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const servicePrivateKey = process.env.ROUTER_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
 
 const rootLogger = new LoggerService(verboseLogging, "router-tms");
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
 const circlesRpc = new CirclesRpcService(rpcUrl);
+const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 
 let routerService: RouterService | undefined;
 if (!dryRun) {
@@ -38,10 +43,11 @@ if (!dryRun) {
 const config: RunConfig = {
   rpcUrl,
   routerAddress,
+  baseGroupAddress,
   dryRun,
   enableBatchSize,
-  baseGroupPageSize,
-  avatarInfoBatchSize
+  fetchPageSize,
+  blacklistChunkSize
 };
 
 const runLogger = rootLogger.child("run");
@@ -76,16 +82,22 @@ async function mainLoop(): Promise<void> {
       const outcome = await runOnce(
         {
           circlesRpc,
+          blacklistingService,
           routerService,
           logger: runLogger
         },
         config
       );
       runLogger.info(
-        `router-tms run completed: baseGroups=${outcome.baseGroupCount} humans=${outcome.humanTrustCount} pending=${outcome.pendingTrustCount} executed=${outcome.executedTrustCount} routerTrusts=${outcome.routerTrustCount}`
+        "router-tms run completed: " +
+          `uniqueHumans=${outcome.uniqueHumanCount} ` +
+          `allowed=${outcome.allowedHumanCount} ` +
+          `blacklisted=${outcome.blacklistedHumanCount} ` +
+          `pending=${outcome.pendingEnableCount} ` +
+          `executed=${outcome.executedEnableCount}`
       );
-      if (outcome.pendingTrustCount === 0) {
-        runLogger.info("Router already trusts every required human CRC for the scanned base groups.");
+      if (outcome.pendingEnableCount === 0) {
+        runLogger.info("Router already trusts every allowed human avatar.");
       }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
@@ -113,9 +125,11 @@ mainLoop().catch((cause) => {
 async function notifySlackStartup(): Promise<void> {
   const pollIntervalMinutes = formatMinutes(pollIntervalMs);
   const message = `✅ **Router-TMS Service started**\n\n` +
-    `Keeping the router aligned with human CRC trusts from all base groups.\n` +
+    `Enabling routing for every non-blacklisted human avatar.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Router: ${routerAddress}\n` +
+    `- Base Group: ${baseGroupAddress}\n` +
+    `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
     `- Poll Interval (minutes): ${pollIntervalMinutes}\n` +
     `- Dry Run: ${dryRun}`;
 

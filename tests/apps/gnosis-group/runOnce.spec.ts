@@ -129,6 +129,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: true,
       scoreThreshold: 50,
       scoreBatchSize: 10,
@@ -166,6 +167,73 @@ describe("gnosis-group runOnce", () => {
     expect(outcome.addressesToUntrust).toEqual([]);
     expect(outcome.untrustBatches).toEqual([]);
     expect(outcome.untrustTxHashes).toEqual([]);
+    const [fetchUrl, fetchInit] = fetchMock.mock.calls[0] ?? [];
+    expect(fetchUrl).toBe("https://scores.local");
+    const requestBody = JSON.parse((fetchInit?.body ?? "{}") as string);
+    expect(requestBody.target_sets).toEqual([[trustedTarget]]);
+  });
+
+  it("uses env-defined score threshold when config omits the value", async () => {
+    const previousEnvThreshold = process.env.GNOSIS_GROUP_SCORE_THRESHOLD;
+    process.env.GNOSIS_GROUP_SCORE_THRESHOLD = "42";
+
+    registerHumanPages = [[trustedTarget]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    circlesRpc.trusteesByTruster[circlesBackerGroup.toLowerCase()] = [trustedTarget];
+    circlesRpc.trusteesByTruster[targetGroup.toLowerCase()] = [];
+
+    const deps: Deps = {
+      blacklistingService: new FakeBlacklist(),
+      circlesRpc,
+      logger: new FakeLogger(true)
+    };
+
+    const cfg: RunConfig = {
+      rpcUrl: "https://rpc.local",
+      scoringServiceUrl: "https://scores.local",
+      autoTrustGroupAddresses: [circlesBackerGroup],
+      targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
+      dryRun: true,
+      scoreBatchSize: 5,
+      blacklistChunkSize: 5,
+      groupBatchSize: 5
+    };
+
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        status: "success",
+        batches: {
+          "0": [{address: trustedTarget, relative_score: 50}]
+        }
+      })
+    });
+
+    try {
+      jest.useFakeTimers();
+      let outcome: Awaited<ReturnType<typeof runOnce>>;
+      try {
+        const runPromise = runOnce(deps, cfg);
+        await jest.runOnlyPendingTimersAsync();
+        outcome = await runPromise;
+      } finally {
+        jest.useRealTimers();
+      }
+
+      expect(outcome.threshold).toBe(42);
+      expect(outcome.addressesAboveThresholdToTrust).toEqual([trustedTarget]);
+    } finally {
+      if (previousEnvThreshold === undefined) {
+        delete process.env.GNOSIS_GROUP_SCORE_THRESHOLD;
+      } else {
+        process.env.GNOSIS_GROUP_SCORE_THRESHOLD = previousEnvThreshold;
+      }
+    }
   });
 
   it("still filters blacklisted avatars in dry-run mode", async () => {
@@ -191,6 +259,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: true,
       scoreThreshold: 10,
       scoreBatchSize: 10,
@@ -250,6 +319,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false,
       scoreThreshold: 10,
       scoreBatchSize: 10,
@@ -313,6 +383,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false,
       scoreThreshold: 10,
       scoreBatchSize: 10,
@@ -379,6 +450,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false,
       scoreThreshold: 10,
       scoreBatchSize: 10,
@@ -446,6 +518,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
@@ -498,6 +571,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: true,
       scoreThreshold: 50,
       scoreBatchSize: 10,
@@ -550,6 +624,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
@@ -596,6 +671,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: "not-an-address",
+      backersGroupAddress: circlesBackerGroup,
       dryRun: true
     };
 
@@ -615,6 +691,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false
     };
 
@@ -642,6 +719,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: true
     };
 
@@ -681,6 +759,7 @@ describe("gnosis-group runOnce", () => {
       scoringServiceUrl: "https://scores.local",
       autoTrustGroupAddresses: [circlesBackerGroup, customAutoTrustGroup],
       targetGroupAddress: targetGroup,
+      backersGroupAddress: circlesBackerGroup,
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
@@ -710,6 +789,9 @@ describe("gnosis-group runOnce", () => {
     expect(outcome.addressesAutoTrustedByGroups).toEqual([autoTrusted, trustedTarget]);
     expect(outcome.addressesQueuedForTrust).toEqual([autoTrusted, trustedTarget]);
     expect(outcome.trustTxHashes).toEqual(["0xtrust_1"]);
+    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
+    const requestBody = JSON.parse((fetchInit?.body ?? "{}") as string);
+    expect(requestBody.target_sets).toEqual([[trustedTarget]]);
     expect(outcome.untrustTxHashes).toEqual([]);
   });
 });
