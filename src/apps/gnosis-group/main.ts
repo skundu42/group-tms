@@ -11,6 +11,7 @@ import {
   DEFAULT_SCORE_BATCH_SIZE,
   DEFAULT_SCORE_THRESHOLD,
   DEFAULT_GROUP_BATCH_SIZE,
+  DEFAULT_BACKERS_GROUP_ADDRESS,
   DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
   RunOutcome
 } from "./logic";
@@ -23,6 +24,7 @@ const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "";
+const backersGroupAddress = process.env.GNOSIS_GROUP_BACKERS_GROUP_ADDRESS || DEFAULT_BACKERS_GROUP_ADDRESS;
 const servicePrivateKey = process.env.GNOSIS_GROUP_SERVICE_PRIVATE_KEY || "";
 const dryRun = process.env.DRY_RUN === "1";
 const slackWebhookUrl = process.env.GNOSIS_GROUP_SLACK_WEBHOOK_URL || "";
@@ -59,6 +61,7 @@ const config: RunConfig = {
   rpcUrl,
   scoringServiceUrl,
   targetGroupAddress,
+  backersGroupAddress,
   fetchPageSize,
   blacklistChunkSize,
   scoreBatchSize,
@@ -71,6 +74,7 @@ rootLogger.info("Starting gnosis-group run with config:");
 rootLogger.info(`  - rpcUrl=${rpcUrl}`);
 rootLogger.info(`  - scoringServiceUrl=${scoringServiceUrl}`);
 rootLogger.info(`  - targetGroupAddress=${targetGroupAddress}`);
+rootLogger.info(`  - backersGroupAddress=${backersGroupAddress}`);
 rootLogger.info(`  - fetchPageSize=${fetchPageSize}`);
 rootLogger.info(`  - blacklistChunkSize=${blacklistChunkSize}`);
 rootLogger.info(`  - scoreBatchSize=${scoreBatchSize}`);

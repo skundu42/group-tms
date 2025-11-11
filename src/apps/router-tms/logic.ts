@@ -1,52 +1,63 @@
-import {CirclesData} from "@circles-sdk/data";
-import {Address} from "@circles-sdk/utils";
+import {CirclesQuery, CirclesRpc} from "@circles-sdk/data";
 import {getAddress} from "ethers";
+import {IBlacklistingService, IBlacklistServiceVerdict} from "../../interfaces/IBlacklistingService";
 import {ICirclesRpc} from "../../interfaces/ICirclesRpc";
 import {ILoggerService} from "../../interfaces/ILoggerService";
 import {IRouterService} from "../../interfaces/IRouterService";
 
+type RegisterHumanRow = {
+  avatar?: string;
+  blockNumber: number;
+  transactionIndex: number;
+  logIndex: number;
+};
+
 export type RunConfig = {
   rpcUrl: string;
   routerAddress: string;
+  baseGroupAddress?: string;
   dryRun?: boolean;
   enableBatchSize?: number;
-  baseGroupPageSize?: number;
-  avatarInfoBatchSize?: number;
+  fetchPageSize?: number;
+  blacklistChunkSize?: number;
 };
 
 export type Deps = {
   circlesRpc: ICirclesRpc;
+  blacklistingService: IBlacklistingService;
   routerService?: IRouterService;
   logger: ILoggerService;
 };
 
-export type BaseGroupPlan = {
-  baseGroup: string;
-  addresses: string[];
-};
-
 export type RunOutcome = {
-  baseGroupCount: number;
-  routerTrustCount: number;
-  humanTrustCount: number;
-  pendingTrustCount: number;
-  executedTrustCount: number;
+  totalAvatarEntries: number;
+  uniqueHumanCount: number;
+  allowedHumanCount: number;
+  blacklistedHumanCount: number;
+  alreadyTrustedCount: number;
+  pendingEnableCount: number;
+  executedEnableCount: number;
   dryRun: boolean;
   txHashes: string[];
-  plans: BaseGroupPlan[];
 };
 
-export const DEFAULT_BASE_GROUP_PAGE_SIZE = 200;
 export const DEFAULT_ENABLE_BATCH_SIZE = 10;
-export const DEFAULT_AVATAR_INFO_BATCH_SIZE = 50;
+export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
+export const DEFAULT_BLACKLIST_CHUNK_SIZE = 500;
+export const DEFAULT_BASE_GROUP_ADDRESS = "0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026";
 
 export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
-  const {circlesRpc, routerService, logger} = deps;
+  const {circlesRpc, blacklistingService, routerService, logger} = deps;
   const dryRun = !!cfg.dryRun;
-  const routerAddress = normalizeAddress(cfg.routerAddress);
 
+  const routerAddress = normalizeAddress(cfg.routerAddress);
   if (!routerAddress) {
     throw new Error(`Invalid router address configured: '${cfg.routerAddress}'`);
+  }
+
+  const baseGroupAddress = normalizeAddress(cfg.baseGroupAddress ?? DEFAULT_BASE_GROUP_ADDRESS);
+  if (!baseGroupAddress) {
+    throw new Error(`Invalid base group address configured: '${cfg.baseGroupAddress ?? DEFAULT_BASE_GROUP_ADDRESS}'`);
   }
 
   if (!dryRun && !routerService) {
@@ -54,226 +65,201 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   }
 
   const enableBatchSize = Math.max(1, cfg.enableBatchSize ?? DEFAULT_ENABLE_BATCH_SIZE);
-  const baseGroupPageSize = Math.max(1, cfg.baseGroupPageSize ?? DEFAULT_BASE_GROUP_PAGE_SIZE);
-  const avatarInfoBatchSize = Math.max(1, cfg.avatarInfoBatchSize ?? DEFAULT_AVATAR_INFO_BATCH_SIZE);
+  const fetchPageSize = Math.max(1, cfg.fetchPageSize ?? DEFAULT_FETCH_PAGE_SIZE);
+  const blacklistChunkSize = Math.max(1, cfg.blacklistChunkSize ?? DEFAULT_BLACKLIST_CHUNK_SIZE);
 
-  const dataClient = new CirclesData(cfg.rpcUrl);
+  logger.info("Fetching human avatars from RegisterHuman table...");
+  const allHumanAvatars = await fetchAllHumanAvatars(cfg.rpcUrl, fetchPageSize, logger);
+  const totalAvatarEntries = allHumanAvatars.length;
+  const uniqueHumanAvatars = Array.from(new Set(allHumanAvatars));
+  logger.info(`Fetched ${totalAvatarEntries} avatar row(s) (${uniqueHumanAvatars.length} unique).`);
 
-  logger.info("Fetching base groups...");
-  const baseGroups = await fetchAllBaseGroups(circlesRpc, baseGroupPageSize, logger);
-  logger.info(`Identified ${baseGroups.length} base group(s).`);
-
-  if (baseGroups.length === 0) {
+  if (uniqueHumanAvatars.length === 0) {
     return {
-      baseGroupCount: 0,
-      routerTrustCount: 0,
-      humanTrustCount: 0,
-      pendingTrustCount: 0,
-      executedTrustCount: 0,
+      totalAvatarEntries,
+      uniqueHumanCount: 0,
+      allowedHumanCount: 0,
+      blacklistedHumanCount: 0,
+      alreadyTrustedCount: 0,
+      pendingEnableCount: 0,
+      executedEnableCount: 0,
       dryRun,
-      txHashes: [],
-      plans: []
+      txHashes: []
+    };
+  }
+
+  logger.info(`Evaluating blacklist for ${uniqueHumanAvatars.length} unique avatar(s)...`);
+  const {allowed: allowedAvatars, blacklisted: blacklistedAvatars} = await partitionBlacklistedAddresses(
+    blacklistingService,
+    uniqueHumanAvatars,
+    blacklistChunkSize,
+    logger
+  );
+  logger.info(
+    `Blacklist evaluation complete. Allowed: ${allowedAvatars.length}, blacklisted: ${blacklistedAvatars.length}.`
+  );
+
+  if (allowedAvatars.length === 0) {
+    return {
+      totalAvatarEntries,
+      uniqueHumanCount: uniqueHumanAvatars.length,
+      allowedHumanCount: 0,
+      blacklistedHumanCount: blacklistedAvatars.length,
+      alreadyTrustedCount: 0,
+      pendingEnableCount: 0,
+      executedEnableCount: 0,
+      dryRun,
+      txHashes: []
     };
   }
 
   logger.info(`Fetching router trust list for ${routerAddress}...`);
   const routerTrustees = await circlesRpc.fetchAllTrustees(routerAddress);
-  const routerTrustSet = new Set<string>();
-  for (const trustee of routerTrustees) {
-    const normalized = normalizeAddress(trustee);
-    if (normalized) {
-      routerTrustSet.add(normalized);
-    }
-  }
-  logger.info(`Router currently trusts ${routerTrustSet.size} address(es).`);
+  const routerTrustSet = new Set(normalizeAddressArray(routerTrustees));
+  logger.info(`Router already trusts ${routerTrustSet.size} address(es).`);
 
-  logger.info("Collecting outgoing trusts for each base group...");
-  const baseGroupTrusts = await collectBaseGroupTrusts(baseGroups, circlesRpc, logger);
+  const alreadyTrusted = allowedAvatars.filter((address) => routerTrustSet.has(address));
+  const pendingAddresses = allowedAvatars.filter((address) => !routerTrustSet.has(address));
 
-  const unionTrustees = new Set<string>();
-  for (const trustees of baseGroupTrusts.values()) {
-    trustees.forEach((address) => unionTrustees.add(address));
-  }
-
-  logger.info(
-    `Discovered ${unionTrustees.size} unique trustee address(es) across all base groups. Filtering for human v2 avatars...`
-  );
-  const humanV2Addresses = await filterHumanV2Addresses(
-    dataClient,
-    Array.from(unionTrustees),
-    avatarInfoBatchSize,
-    logger
-  );
-  logger.info(`Filtered down to ${humanV2Addresses.size} human v2 trustee address(es).`);
-
-  const plannedAddressesLower = new Set<string>();
-  const planMap = new Map<string, string[]>();
-
-  for (const [baseGroup, trustees] of baseGroupTrusts.entries()) {
-    const humanTrustees = trustees.filter((address) => humanV2Addresses.has(address));
-    if (humanTrustees.length === 0) {
-      continue;
-    }
-
-    for (const trustee of humanTrustees) {
-      if (routerTrustSet.has(trustee) || plannedAddressesLower.has(trustee)) {
-        continue;
-      }
-
-      plannedAddressesLower.add(trustee);
-      if (!planMap.has(baseGroup)) {
-        planMap.set(baseGroup, []);
-      }
-      planMap.get(baseGroup)!.push(trustee);
-    }
-  }
-
-  const plans = Array.from(planMap.entries()).map(([baseGroup, addresses]) => ({
-    baseGroup,
-    addresses
-  }));
-
-  if (plannedAddressesLower.size === 0) {
-    logger.info("Router already trusts every human v2 CRC trusted by the current set of base groups.");
+  if (pendingAddresses.length === 0) {
+    logger.info("Router already trusts every allowed human avatar.");
     return {
-      baseGroupCount: baseGroups.length,
-      routerTrustCount: routerTrustSet.size,
-      humanTrustCount: humanV2Addresses.size,
-      pendingTrustCount: 0,
-      executedTrustCount: 0,
+      totalAvatarEntries,
+      uniqueHumanCount: uniqueHumanAvatars.length,
+      allowedHumanCount: allowedAvatars.length,
+      blacklistedHumanCount: blacklistedAvatars.length,
+      alreadyTrustedCount: alreadyTrusted.length,
+      pendingEnableCount: 0,
+      executedEnableCount: 0,
       dryRun,
-      txHashes: [],
-      plans
+      txHashes: []
     };
   }
 
   logger.info(
-    `Need to trust ${plannedAddressesLower.size} additional human v2 CRC(s) across ${plans.length} base group(s).`
+    `Need to enable routing for ${pendingAddresses.length} human avatar(s) in base group ${baseGroupAddress}.`
   );
 
+  const batches = chunkArray(pendingAddresses, enableBatchSize);
   const txHashes: string[] = [];
-  let executedTrustCount = 0;
+  let executedEnableCount = 0;
 
-  for (const {baseGroup, addresses} of plans) {
-    if (dryRun) {
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+    const batch = batches[batchIndex];
+    if (dryRun || !routerService) {
       logger.info(
-        `[DRY-RUN][${baseGroup}] Addresses to enable for routing: ${addresses.join(", ")}`
+        `[DRY-RUN] Would call enableCRCForRouting with ${batch.length} avatar(s) ` +
+          `(batch ${batchIndex + 1}/${batches.length}) for base group ${baseGroupAddress}.`
       );
-    }
-
-    const batches = chunkArray(addresses, enableBatchSize);
-    if (batches.length === 0) {
       continue;
     }
 
+    const txHash = await routerService.enableCRCForRouting(baseGroupAddress, batch);
+    txHashes.push(txHash);
+    executedEnableCount += batch.length;
+    batch.forEach((address) => routerTrustSet.add(address));
     logger.info(
-      `[${baseGroup}] Preparing ${batches.length} enableCRCForRouting batch(es) for ${addresses.length} address(es).`
+      `enableCRCForRouting tx=${txHash} (batch ${batchIndex + 1}/${batches.length}) for ${batch.length} avatar(s).`
     );
-
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-      const batch = batches[batchIndex];
-      const invalidBatchAddresses = batch.filter((address) => !humanV2Addresses.has(address));
-      if (invalidBatchAddresses.length > 0) {
-        logger.warn(
-          `[${baseGroup}] Skipping enableCRCForRouting batch ${batchIndex + 1}/${batches.length}; ` +
-            "batch contains non-human or non-v2 address(es): " +
-            invalidBatchAddresses.join(", ")
-        );
-        continue;
-      }
-
-      if (dryRun || !routerService) {
-        logger.info(
-          `[DRY-RUN][${baseGroup}] Would call enableCRCForRouting with ${batch.length} address(es) (batch ${batchIndex + 1}/${batches.length}).`
-        );
-        continue;
-      }
-
-      const txHash = await routerService.enableCRCForRouting(baseGroup, batch);
-      txHashes.push(txHash);
-      executedTrustCount += batch.length;
-      batch.forEach((address) => routerTrustSet.add(address));
-      logger.info(
-        `[${baseGroup}] enableCRCForRouting tx=${txHash} (batch ${batchIndex + 1}/${batches.length}) for ${batch.length} address(es).`
-      );
-    }
   }
 
   return {
-    baseGroupCount: baseGroups.length,
-    routerTrustCount: routerTrustSet.size,
-    humanTrustCount: humanV2Addresses.size,
-    pendingTrustCount: plannedAddressesLower.size,
-    executedTrustCount: dryRun ? 0 : executedTrustCount,
+    totalAvatarEntries,
+    uniqueHumanCount: uniqueHumanAvatars.length,
+    allowedHumanCount: allowedAvatars.length,
+    blacklistedHumanCount: blacklistedAvatars.length,
+    alreadyTrustedCount: alreadyTrusted.length,
+    pendingEnableCount: pendingAddresses.length,
+    executedEnableCount: dryRun ? 0 : executedEnableCount,
     dryRun,
-    txHashes,
-    plans
+    txHashes
   };
 }
 
-async function fetchAllBaseGroups(
-  circlesRpc: ICirclesRpc,
+async function fetchAllHumanAvatars(
+  rpcUrl: string,
   pageSize: number,
   logger: ILoggerService
 ): Promise<string[]> {
-  const baseGroupAddresses = await circlesRpc.fetchAllBaseGroups(pageSize);
-  const normalized = normalizeAddressArray(baseGroupAddresses);
+  const rpc = new CirclesRpc(rpcUrl);
+  const query = new CirclesQuery<RegisterHumanRow>(rpc, {
+    namespace: "CrcV2",
+    table: "RegisterHuman",
+    columns: ["avatar", "blockNumber", "transactionIndex", "logIndex"],
+    sortOrder: "ASC",
+    limit: pageSize
+  });
 
-  if (normalized.length === 0) {
-    logger.warn("Base group query returned zero rows.");
-  }
+  const avatars: string[] = [];
+  let pages = 0;
 
-  return normalized;
-}
-
-async function collectBaseGroupTrusts(
-  baseGroups: string[],
-  circlesRpc: ICirclesRpc,
-  logger: ILoggerService
-): Promise<Map<string, string[]>> {
-  const map = new Map<string, string[]>();
-
-  for (const baseGroup of baseGroups) {
-    logger.debug(`[${baseGroup}] Fetching outgoing trusts...`);
-    const trusteesRaw = await circlesRpc.fetchAllTrustees(baseGroup);
-    const normalized = normalizeAddressArray(trusteesRaw);
-    map.set(baseGroup, normalized);
-    logger.debug(`[${baseGroup}] Found ${normalized.length} trustee address(es).`);
-  }
-
-  return map;
-}
-
-async function filterHumanV2Addresses(
-  dataClient: CirclesData,
-  addresses: string[],
-  batchSize: number,
-  logger: ILoggerService
-): Promise<Set<string>> {
-  const humans = new Set<string>();
-  const unique = normalizeAddressArray(addresses);
-  if (unique.length === 0) {
-    return humans;
-  }
-
-  const batches = chunkArray(unique, batchSize);
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-    const batch = batches[batchIndex];
-    logger.debug(`Fetching avatar info batch ${batchIndex + 1}/${batches.length} (${batch.length} address(es)).`);
-    const typedAddresses = batch.map((address) => getAddress(address)) as Address[];
-    const infos = await dataClient.getAvatarInfoBatch(typedAddresses);
-    for (const info of infos) {
-      if (!info.isHuman || info.version !== 2) {
+  while (await query.queryNextPage()) {
+    pages += 1;
+    const rows = query.currentPage?.results ?? [];
+    for (const row of rows) {
+      if (!row || typeof row.avatar !== "string") {
         continue;
       }
-      const normalized = normalizeAddress(info.avatar);
+
+      const normalized = normalizeAddress(row.avatar);
       if (normalized) {
-        humans.add(normalized);
+        avatars.push(normalized);
       }
     }
   }
 
-  return humans;
+  logger.info(`Fetched ${avatars.length} avatars from RegisterHuman table across ${pages} page(s).`);
+  return avatars;
+}
+
+async function partitionBlacklistedAddresses(
+  service: IBlacklistingService,
+  addresses: string[],
+  chunkSize: number,
+  logger: ILoggerService
+): Promise<{allowed: string[]; blacklisted: string[]}> {
+  const allowed: string[] = [];
+  const blacklisted: string[] = [];
+
+  for (let i = 0; i < addresses.length; i += chunkSize) {
+    const chunk = addresses.slice(i, i + chunkSize);
+    const verdicts = await service.checkBlacklist(chunk);
+    const verdictMap = new Map<string, IBlacklistServiceVerdict>();
+
+    for (const verdict of verdicts) {
+      verdictMap.set(verdict.address.toLowerCase(), verdict);
+    }
+
+    for (const address of chunk) {
+      const verdict = verdictMap.get(address.toLowerCase());
+      if (!verdict) {
+        logger.warn(`No blacklist verdict returned for ${address}; treating as allowed.`);
+        allowed.push(address);
+        continue;
+      }
+
+      if (isBlacklisted(verdict)) {
+        blacklisted.push(address);
+      } else {
+        allowed.push(address);
+      }
+    }
+  }
+
+  return {allowed, blacklisted};
+}
+
+function isBlacklisted(verdict: IBlacklistServiceVerdict): boolean {
+  if (verdict.is_bot) {
+    return true;
+  }
+
+  if (!verdict.category) {
+    return false;
+  }
+
+  const category = verdict.category.toLowerCase();
+  return category === "blocked" || category === "flagged";
 }
 
 function chunkArray<T>(values: T[], chunkSize: number): T[][] {

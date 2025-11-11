@@ -31,6 +31,7 @@ export type RunConfig = {
   scoringServiceUrl: string;
   targetGroupAddress: string;
   autoTrustGroupAddresses?: string[];
+  backersGroupAddress?: string;
   fetchPageSize?: number;
   blacklistChunkSize?: number;
   scoreBatchSize?: number;
@@ -72,13 +73,15 @@ export type RunOutcome = {
 export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
 export const DEFAULT_BLACKLIST_CHUNK_SIZE = 500;
 export const DEFAULT_SCORE_BATCH_SIZE = 20;
-export const DEFAULT_SCORE_THRESHOLD = 50;
+export const DEFAULT_SCORE_THRESHOLD = 70;
 export const DEFAULT_GROUP_BATCH_SIZE = 10;
+export const DEFAULT_BACKERS_GROUP_ADDRESS = "0x1aca75e38263c79d9d4f10df0635cc6fcfe6f026";
 export const DEFAULT_AUTO_TRUST_GROUP_ADDRESSES = [
-  "0x1aca75e38263c79d9d4f10df0635cc6fcfe6f026",
+  DEFAULT_BACKERS_GROUP_ADDRESS,
   "0xb629a1e86F3eFada0F87C83494Da8Cc34C3F84ef"
 ] as const;
 
+const SCORE_THRESHOLD_ENV_VAR = "GNOSIS_GROUP_SCORE_THRESHOLD";
 const BLACKLIST_FETCH_MAX_ATTEMPTS = 3;
 const BLACKLIST_FETCH_RETRY_DELAY_MS = 2_000;
 
@@ -93,13 +96,18 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   const fetchPageSize = Math.max(1, cfg.fetchPageSize ?? DEFAULT_FETCH_PAGE_SIZE);
   const blacklistChunkSize = Math.max(1, cfg.blacklistChunkSize ?? DEFAULT_BLACKLIST_CHUNK_SIZE);
   const scoreBatchSize = Math.max(1, cfg.scoreBatchSize ?? DEFAULT_SCORE_BATCH_SIZE);
-  const scoreThreshold = cfg.scoreThreshold ?? DEFAULT_SCORE_THRESHOLD;
+  const scoreThreshold = resolveScoreThreshold(cfg.scoreThreshold, logger);
   const groupBatchSize = Math.max(1, cfg.groupBatchSize ?? DEFAULT_GROUP_BATCH_SIZE);
   const dryRun = !!cfg.dryRun;
 
   const targetGroupAddress = normalizeAddress(cfg.targetGroupAddress);
   if (!targetGroupAddress) {
     throw new Error(`Invalid target group address configured: '${cfg.targetGroupAddress}'`);
+  }
+
+  const backersGroupAddress = normalizeAddress(cfg.backersGroupAddress ?? DEFAULT_BACKERS_GROUP_ADDRESS);
+  if (!backersGroupAddress) {
+    throw new Error(`Invalid backers group address configured: '${cfg.backersGroupAddress ?? DEFAULT_BACKERS_GROUP_ADDRESS}'`);
   }
 
   if (!dryRun && !groupService) {
@@ -122,6 +130,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
 
   const configuredAutoTrustGroups = cfg.autoTrustGroupAddresses ?? [];
   const autoTrustGroupAddresses = uniqueNormalizedAddresses([
+    backersGroupAddress,
     ...DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
     ...configuredAutoTrustGroups
   ]);
@@ -136,7 +145,6 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   for (const groupAddress of autoTrustGroupAddresses) {
     const trusteesRaw = await circlesRpc.fetchAllTrustees(groupAddress);
     const trustees = uniqueNormalizedAddresses(trusteesRaw);
-    loggerTrust.info(`Fetched ${trustees.length} trusted addresses from auto-trust group ${groupAddress}.`);
     autoTrustGroupTrustees.set(groupAddress, trustees);
   }
 
@@ -217,10 +225,10 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     autoTrustGroupTrustees.set(groupAddress, allowedTrustees);
   }
 
-  const trustedTargets = Array.from(autoTrustedNormalized.values());
+  const trustedTargets = autoTrustGroupTrustees.get(backersGroupAddress) ?? [];
 
   if (trustedTargets.length === 0) {
-    throw new Error("No non-blacklisted trusted addresses found across auto-trust groups.");
+    throw new Error(`No non-blacklisted trusted addresses found in backers group ${backersGroupAddress}.`);
   }
 
   const blacklistedTargetGroupTrustees = targetGroupTrustees.filter((address) =>
@@ -634,6 +642,26 @@ function uniqueNormalizedAddresses(addresses: Iterable<string>): string[] {
   }
 
   return result;
+}
+
+function resolveScoreThreshold(configured: number | undefined, logger: ILoggerService): number {
+  if (typeof configured === "number" && Number.isFinite(configured)) {
+    return configured;
+  }
+
+  const raw = process.env[SCORE_THRESHOLD_ENV_VAR];
+  if (raw && raw.trim().length > 0) {
+    const parsed = Number.parseFloat(raw);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+
+    logger.warn(
+      `Invalid number for ${SCORE_THRESHOLD_ENV_VAR}='${raw}', using default ${DEFAULT_SCORE_THRESHOLD}.`
+    );
+  }
+
+  return DEFAULT_SCORE_THRESHOLD;
 }
 
 async function fetchAllHumanAvatars(
