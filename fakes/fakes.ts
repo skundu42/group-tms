@@ -15,6 +15,7 @@ import {ILoggerService} from "../src/interfaces/ILoggerService";
 import {AffiliateGroupChanged, IAffiliateGroupEventsService} from "../src/interfaces/IAffiliateGroupEventsService";
 import {IAvatarSafeService} from "../src/interfaces/IAvatarSafeService";
 import {IRouterService} from "../src/interfaces/IRouterService";
+import {IRouterEnablementStore} from "../src/interfaces/IRouterEnablementStore";
 
 export class FakeLogger implements ILoggerService {
   logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
@@ -254,5 +255,25 @@ export class FakeRouterService implements IRouterService {
       : `0xtx_${this.calls.length}`;
     this.txHashes.push(txHash);
     return txHash;
+  }
+}
+
+export class FakeRouterEnablementStore implements IRouterEnablementStore {
+  private readonly enabled = new Set<string>();
+
+  constructor(initial?: string[]) {
+    if (initial) {
+      initial.forEach((address) => this.enabled.add(address.toLowerCase()));
+    }
+  }
+
+  async loadEnabledAddresses(): Promise<string[]> {
+    return Array.from(this.enabled);
+  }
+
+  async markEnabled(addresses: string[]): Promise<void> {
+    for (const address of addresses) {
+      this.enabled.add(address.toLowerCase());
+    }
   }
 }

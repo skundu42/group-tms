@@ -4,6 +4,7 @@ import {IBlacklistingService, IBlacklistServiceVerdict} from "../../interfaces/I
 import {ICirclesRpc} from "../../interfaces/ICirclesRpc";
 import {ILoggerService} from "../../interfaces/ILoggerService";
 import {IRouterService} from "../../interfaces/IRouterService";
+import {IRouterEnablementStore} from "../../interfaces/IRouterEnablementStore";
 
 type RegisterHumanRow = {
   avatar?: string;
@@ -27,6 +28,7 @@ export type Deps = {
   blacklistingService: IBlacklistingService;
   routerService?: IRouterService;
   logger: ILoggerService;
+  enablementStore: IRouterEnablementStore;
 };
 
 export type RunOutcome = {
@@ -47,7 +49,7 @@ export const DEFAULT_BLACKLIST_CHUNK_SIZE = 500;
 export const DEFAULT_BASE_GROUP_ADDRESS = "0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026";
 
 export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
-  const {circlesRpc, blacklistingService, routerService, logger} = deps;
+  const {circlesRpc, blacklistingService, routerService, logger, enablementStore} = deps;
   const dryRun = !!cfg.dryRun;
 
   const routerAddress = normalizeAddress(cfg.routerAddress);
@@ -119,9 +121,33 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   logger.info(`Router already trusts ${routerTrustSet.size} address(es).`);
 
   const alreadyTrusted = allowedAvatars.filter((address) => routerTrustSet.has(address));
-  const pendingAddresses = allowedAvatars.filter((address) => !routerTrustSet.has(address));
+  const previouslyEnabled = new Set(normalizeAddressArray(await enablementStore.loadEnabledAddresses()));
+  const pendingAllowedAvatars = allowedAvatars.filter((address) => !previouslyEnabled.has(address));
 
-  if (pendingAddresses.length === 0) {
+  if (pendingAllowedAvatars.length === 0) {
+    logger.info("Every allowed human avatar has already been enabled for routing.");
+    return {
+      totalAvatarEntries,
+      uniqueHumanCount: uniqueHumanAvatars.length,
+      allowedHumanCount: allowedAvatars.length,
+      blacklistedHumanCount: blacklistedAvatars.length,
+      alreadyTrustedCount: alreadyTrusted.length,
+      pendingEnableCount: 0,
+      executedEnableCount: 0,
+      dryRun,
+      txHashes: []
+    };
+  }
+
+  const avatarBaseGroupAssignments = await buildAvatarBaseGroupAssignments(circlesRpc, logger);
+  const enableTargets = buildEnableTargets(
+    pendingAllowedAvatars,
+    avatarBaseGroupAssignments,
+    baseGroupAddress
+  );
+  const pendingEnableCount = enableTargets.reduce((sum, target) => sum + target.addresses.length, 0);
+
+  if (pendingEnableCount === 0) {
     logger.info("Router already trusts every allowed human avatar.");
     return {
       totalAvatarEntries,
@@ -137,30 +163,33 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   }
 
   logger.info(
-    `Need to enable routing for ${pendingAddresses.length} human avatar(s) in base group ${baseGroupAddress}.`
+    `Need to enable routing for ${pendingEnableCount} human avatar(s) across ${enableTargets.length} base group target(s).`
   );
 
-  const batches = chunkArray(pendingAddresses, enableBatchSize);
   const txHashes: string[] = [];
   let executedEnableCount = 0;
 
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-    const batch = batches[batchIndex];
-    if (dryRun || !routerService) {
-      logger.info(
-        `[DRY-RUN] Would call enableCRCForRouting with ${batch.length} avatar(s) ` +
-          `(batch ${batchIndex + 1}/${batches.length}) for base group ${baseGroupAddress}.`
-      );
-      continue;
-    }
+  for (const target of enableTargets) {
+    const batches = chunkArray(target.addresses, enableBatchSize);
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      const batch = batches[batchIndex];
+      if (dryRun || !routerService) {
+        logger.info(
+          `[DRY-RUN] Would call enableCRCForRouting with ${batch.length} avatar(s) ` +
+            `(batch ${batchIndex + 1}/${batches.length}) for base group ${target.baseGroup}.`
+        );
+        continue;
+      }
 
-    const txHash = await routerService.enableCRCForRouting(baseGroupAddress, batch);
-    txHashes.push(txHash);
-    executedEnableCount += batch.length;
-    batch.forEach((address) => routerTrustSet.add(address));
-    logger.info(
-      `enableCRCForRouting tx=${txHash} (batch ${batchIndex + 1}/${batches.length}) for ${batch.length} avatar(s).`
-    );
+      const txHash = await routerService.enableCRCForRouting(target.baseGroup, batch);
+      txHashes.push(txHash);
+      executedEnableCount += batch.length;
+      await enablementStore.markEnabled(batch);
+      batch.forEach((address) => routerTrustSet.add(address));
+      logger.info(
+        `enableCRCForRouting tx=${txHash} (batch ${batchIndex + 1}/${batches.length}) for ${batch.length} avatar(s) in base group ${target.baseGroup}.`
+      );
+    }
   }
 
   return {
@@ -169,7 +198,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     allowedHumanCount: allowedAvatars.length,
     blacklistedHumanCount: blacklistedAvatars.length,
     alreadyTrustedCount: alreadyTrusted.length,
-    pendingEnableCount: pendingAddresses.length,
+    pendingEnableCount,
     executedEnableCount: dryRun ? 0 : executedEnableCount,
     dryRun,
     txHashes
@@ -295,4 +324,61 @@ function normalizeAddressArray(addresses: string[]): string[] {
     }
   }
   return Array.from(unique);
+}
+
+async function buildAvatarBaseGroupAssignments(
+  circlesRpc: ICirclesRpc,
+  logger: ILoggerService
+): Promise<Map<string, string>> {
+  logger.info("Fetching base groups to map avatar assignments...");
+  const baseGroups = await circlesRpc.fetchAllBaseGroups();
+  const normalizedBaseGroups = normalizeAddressArray(baseGroups);
+  logger.info(`Fetched ${normalizedBaseGroups.length} base group(s).`);
+
+  const assignment = new Map<string, string>();
+  for (const baseGroup of normalizedBaseGroups) {
+    const trustees = await circlesRpc.fetchAllTrustees(baseGroup);
+    const normalizedTrustees = normalizeAddressArray(trustees);
+    logger.info(`Base group ${baseGroup} has ${normalizedTrustees.length} trustee(s).`);
+    for (const trustee of normalizedTrustees) {
+      if (!assignment.has(trustee)) {
+        assignment.set(trustee, baseGroup);
+      }
+    }
+  }
+  return assignment;
+}
+
+function buildEnableTargets(
+  pendingAvatars: string[],
+  avatarBaseGroupAssignments: Map<string, string>,
+  fallbackBaseGroup: string
+): {baseGroup: string; addresses: string[]}[] {
+  const grouped = new Map<string, string[]>();
+  const fallback: string[] = [];
+
+  for (const avatar of pendingAvatars) {
+    const baseGroup = avatarBaseGroupAssignments.get(avatar);
+    if (baseGroup) {
+      if (!grouped.has(baseGroup)) {
+        grouped.set(baseGroup, []);
+      }
+      grouped.get(baseGroup)?.push(avatar);
+      continue;
+    }
+    fallback.push(avatar);
+  }
+
+  const targets: {baseGroup: string; addresses: string[]}[] = [];
+  for (const [baseGroup, avatars] of grouped.entries()) {
+    if (avatars.length > 0) {
+      targets.push({baseGroup, addresses: avatars});
+    }
+  }
+
+  if (fallback.length > 0) {
+    targets.push({baseGroup: fallbackBaseGroup, addresses: fallback});
+  }
+
+  return targets;
 }
