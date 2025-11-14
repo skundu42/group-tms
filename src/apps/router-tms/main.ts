@@ -12,6 +12,7 @@ import {
   DEFAULT_BASE_GROUP_ADDRESS
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {InMemoryRouterEnablementStore} from "./enablementStore";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const routerAddress = process.env.ROUTER_ADDRESS || "0xdc287474114cc0551a81ddc2eb51783fbf34802f";
@@ -31,6 +32,7 @@ const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
+const enablementStore = new InMemoryRouterEnablementStore();
 
 let routerService: RouterService | undefined;
 if (!dryRun) {
@@ -84,7 +86,8 @@ async function mainLoop(): Promise<void> {
           circlesRpc,
           blacklistingService,
           routerService,
-          logger: runLogger
+          logger: runLogger,
+          enablementStore
         },
         config
       );

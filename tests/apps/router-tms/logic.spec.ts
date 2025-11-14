@@ -9,7 +9,8 @@ import {
   FakeBlacklist,
   FakeCirclesRpc,
   FakeLogger,
-  FakeRouterService
+  FakeRouterService,
+  FakeRouterEnablementStore
 } from "../../../fakes/fakes";
 
 const ROUTER_ADDRESS = "0xDC287474114cC0551a81DdC2EB51783fBF34802F";
@@ -52,11 +53,13 @@ function makeDeps(overrides?: Partial<Deps>): Deps {
   const circlesRpc = new FakeCirclesRpc();
   const blacklistingService = new FakeBlacklist();
   const logger = new FakeLogger(true);
+  const enablementStore = new FakeRouterEnablementStore();
 
   return {
     circlesRpc,
     blacklistingService,
     logger,
+    enablementStore,
     ...overrides
   };
 }
@@ -128,12 +131,12 @@ describe("router-tms runOnce", () => {
     expect(outcome.allowedHumanCount).toBe(2);
     expect(outcome.blacklistedHumanCount).toBe(1);
     expect(outcome.alreadyTrustedCount).toBe(1);
-    expect(outcome.pendingEnableCount).toBe(1);
-    expect(outcome.executedEnableCount).toBe(1);
+    expect(outcome.pendingEnableCount).toBe(2);
+    expect(outcome.executedEnableCount).toBe(2);
     expect(outcome.txHashes).toEqual(["0xtx_enable"]);
 
     expect(routerService.calls).toEqual([
-      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]}
+      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanAlice.toLowerCase(), humanBob.toLowerCase()]}
     ]);
   });
 
@@ -154,5 +157,72 @@ describe("router-tms runOnce", () => {
     expect(outcome.pendingEnableCount).toBe(2);
     expect(outcome.executedEnableCount).toBe(0);
     expect(outcome.txHashes).toEqual([]);
+  });
+
+  it("enables routing per base group assignments and falls back to the configured Circles backer group", async () => {
+    const circlesBackerGroup = getAddress("0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026");
+    const baseGroupA = getAddress("0xA00000000000000000000000000000000000000A");
+    const baseGroupB = getAddress("0xB00000000000000000000000000000000000000B");
+    const humanAlice = getAddress("0x2000000000000000000000000000000000000100");
+    const humanBob = getAddress("0x2000000000000000000000000000000000000101");
+    const humanCarol = getAddress("0x2000000000000000000000000000000000000102");
+
+    registerHumanPages = [[humanAlice, humanBob, humanCarol]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    circlesRpc.baseGroups = [baseGroupA, baseGroupB];
+    circlesRpc.trusteesByTruster[baseGroupA.toLowerCase()] = [humanAlice];
+    circlesRpc.trusteesByTruster[baseGroupB.toLowerCase()] = [humanBob];
+    circlesRpc.trusteesByTruster[ROUTER_ADDRESS.toLowerCase()] = [];
+
+    const routerService = new FakeRouterService(["0xtx_a", "0xtx_b", "0xtx_c"]);
+
+    const deps = makeDeps({
+      circlesRpc,
+      routerService
+    });
+
+    const cfg = makeConfig({
+      dryRun: false,
+      baseGroupAddress: circlesBackerGroup,
+      enableBatchSize: 5
+    });
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.pendingEnableCount).toBe(3);
+    expect(outcome.executedEnableCount).toBe(3);
+    expect(outcome.txHashes).toEqual(["0xtx_a", "0xtx_b", "0xtx_c"]);
+
+    expect(routerService.calls).toEqual([
+      {baseGroup: baseGroupA.toLowerCase(), crcAddresses: [humanAlice.toLowerCase()]},
+      {baseGroup: baseGroupB.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]},
+      {baseGroup: circlesBackerGroup.toLowerCase(), crcAddresses: [humanCarol.toLowerCase()]}
+    ]);
+  });
+
+  it("skips enablement calls for avatars that were already processed in previous runs", async () => {
+    const humanAlice = getAddress("0x2000000000000000000000000000000000000200");
+    const humanBob = getAddress("0x2000000000000000000000000000000000000201");
+
+    registerHumanPages = [[humanAlice, humanBob]];
+
+    const enablementStore = new FakeRouterEnablementStore();
+    const routerService = new FakeRouterService(["0xtx_first"]);
+
+    const deps = makeDeps({
+      routerService,
+      enablementStore
+    });
+
+    const cfg = makeConfig({dryRun: false});
+
+    await runOnce(deps, cfg);
+    const secondOutcome = await runOnce(deps, cfg);
+
+    expect(secondOutcome.pendingEnableCount).toBe(0);
+    expect(secondOutcome.executedEnableCount).toBe(0);
+    expect(secondOutcome.txHashes).toEqual([]);
+    expect(routerService.calls).toHaveLength(1);
   });
 });
