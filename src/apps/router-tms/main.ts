@@ -1,5 +1,3 @@
-import path from "path";
-
 import {CirclesRpcService} from "../../services/circlesRpcService";
 import {LoggerService} from "../../services/loggerService";
 import {SlackService} from "../../services/slackService";
@@ -14,7 +12,7 @@ import {
   DEFAULT_BASE_GROUP_ADDRESS
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
-import {FileRouterEnablementStore} from "./enablementStore";
+import {InMemoryRouterEnablementStore} from "./enablementStore";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const routerAddress = process.env.ROUTER_ADDRESS || "0xdc287474114cc0551a81ddc2eb51783fbf34802f";
@@ -28,14 +26,13 @@ const blacklistChunkSize = parseEnvInt("ROUTER_BLACKLIST_CHUNK_SIZE", DEFAULT_BL
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const servicePrivateKey = process.env.ROUTER_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
-const enablementStateFile = process.env.ROUTER_ENABLE_STATE_FILE || path.resolve(process.cwd(), "router-tms-enabled.json");
 
 const rootLogger = new LoggerService(verboseLogging, "router-tms");
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
-const enablementStore = new FileRouterEnablementStore(enablementStateFile);
+const enablementStore = new InMemoryRouterEnablementStore();
 
 let routerService: RouterService | undefined;
 if (!dryRun) {
