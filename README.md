@@ -145,6 +145,10 @@ VERBOSE_LOGGING=1     # any truthy value enables debug/table
 # RPC & addresses
 RPC_URL=https://rpc.aboutcircles.com/
 
+# Safe execution
+GNOSIS_GROUP_SAFE_ADDRESS=                # Safe that owns the group service role
+GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY=     # Private key of a 1/n Safe signer 
+
 # External services
 BLACKLISTING_SERVICE_URL=https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify
 GNOSIS_GROUP_SCORING_URL=https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch
@@ -221,6 +225,7 @@ VERBOSE_LOGGING=1
 ### Gnosis Group App
 * Fetches registered human avatars and filters out blacklisted addresses
 * Calls a relative trust scoring service to rank avatars by configured targets
+* Uses a Safe for execution; set `GNOSIS_GROUP_SAFE_ADDRESS` plus `GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY` (or `SERVICE_PRIVATE_KEY`) for a 1/n Safe owner
 * `GNOSIS_GROUP_DRY_RUN=1` (or `DRY_RUN=1`) skips blacklist and scoring service calls while logging the batches that would be requested
 
 ### Docker Notes

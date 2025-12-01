@@ -1,7 +1,8 @@
 import {LoggerService} from "../../services/loggerService";
 import {BlacklistingService} from "../../services/blacklistingService";
 import {CirclesRpcService} from "../../services/circlesRpcService";
-import {GroupService} from "../../services/groupService";
+import {IGroupService} from "../../interfaces/IGroupService";
+import {SafeGroupService} from "../../services/safeGroupService";
 import {SlackService} from "../../services/slackService";
 import {
   runOnce,
@@ -25,7 +26,8 @@ const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "0xC19BC204eb1c1D5B3FE500E5E5dfaBaB625F286c";
 const backersGroupAddress = process.env.GNOSIS_GROUP_BACKERS_GROUP_ADDRESS || DEFAULT_BACKERS_GROUP_ADDRESS;
-const servicePrivateKey = process.env.GNOSIS_GROUP_SERVICE_PRIVATE_KEY || "";
+const safeAddress = process.env.GNOSIS_GROUP_SAFE_ADDRESS || process.env.SAFE_ADDRESS || "";
+const safeSignerPrivateKey = process.env.GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY || "";
 const dryRun = process.env.DRY_RUN === "1";
 const slackWebhookUrl = process.env.GNOSIS_GROUP_SLACK_WEBHOOK_URL || "";
 const runIntervalMinutes = Math.max(1, parseEnvInt("GNOSIS_GROUP_RUN_INTERVAL_MINUTES", 30));
@@ -47,14 +49,18 @@ const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
 
 const runLogger = rootLogger.child("run");
-let groupService: GroupService | undefined;
+let groupService: IGroupService | undefined;
 
-if (!dryRun && servicePrivateKey.trim().length === 0) {
-  throw new Error("GNOSIS_GROUP_SERVICE_PRIVATE_KEY (or SERVICE_PRIVATE_KEY) is required when not running gnosis-group in dry-run mode");
+if (!dryRun && safeSignerPrivateKey.trim().length === 0) {
+  throw new Error("GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY (or GNOSIS_GROUP_SERVICE_PRIVATE_KEY / SERVICE_PRIVATE_KEY) is required when not running gnosis-group in dry-run mode");
+}
+
+if (!dryRun && safeAddress.trim().length === 0) {
+  throw new Error("GNOSIS_GROUP_SAFE_ADDRESS (or SAFE_ADDRESS) is required when not running gnosis-group in dry-run mode");
 }
 
 if (!dryRun) {
-  groupService = new GroupService(rpcUrl, servicePrivateKey);
+  groupService = new SafeGroupService(rpcUrl, safeSignerPrivateKey, safeAddress);
 }
 
 const config: RunConfig = {
@@ -81,7 +87,8 @@ rootLogger.info(`  - scoreBatchSize=${scoreBatchSize}`);
 rootLogger.info(`  - scoreThreshold=${scoreThreshold}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
 rootLogger.info(`  - defaultAutoTrustGroupAddresses=${DEFAULT_AUTO_TRUST_GROUP_ADDRESSES.join(",")}`);
-rootLogger.info(`  - servicePrivateKeyConfigured=${servicePrivateKey.trim().length > 0}`);
+rootLogger.info(`  - safeAddress=${safeAddress || "(not set)"}`);
+rootLogger.info(`  - safeSignerPrivateKeyConfigured=${safeSignerPrivateKey.trim().length > 0}`);
 rootLogger.info(`  - dryRun=${dryRun}`);
 rootLogger.info(`  - runIntervalMinutes=${runIntervalMinutes}`);
 rootLogger.info(`  - slackConfigured=${slackConfigured}`);
