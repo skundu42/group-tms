@@ -1,7 +1,7 @@
 import {GroupOwnerAndServiceAddress, IGroupService} from "../interfaces/IGroupService";
 import {Contract, getAddress, JsonRpcProvider, Wallet} from "ethers";
 
-const GROUP_MINI_ABI = [
+export const GROUP_MINI_ABI = [
   "function owner() view returns (address)",
   "function service() view returns (address)",
   "function trustBatchWithConditions(address[] memory _members, uint96 _expiry)"
@@ -16,16 +16,9 @@ export class GroupService implements IGroupService {
     this.wallet = new Wallet(servicePrivateKey, this.provider);
   }
 
-  /**
-   * Calls the `trustBatchWithConditions` function of the group contract and returns the transaction hash.
-   * @param groupAddress
-   * @param trusteeAddresses
-   * @returns The transaction hash of the trustBatchWithConditions call.
-   */
   async trustBatchWithConditions(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
     const group = this.getWritableGroupContract(groupAddress);
 
-    // uint96 max
     const expiry: bigint = (1n << 96n) - 1n;
 
     const tx = await group.trustBatchWithConditions(trusteeAddresses, expiry);
