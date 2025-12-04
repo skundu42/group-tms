@@ -29,7 +29,7 @@ const CFG: RunConfig = {
   confirmationBlocks: 2,
   backingFactoryAddress: BACKING_FACTORY_ADDRESS,
   backersGroupAddress: GROUP,
-  deployedAtBlock: DEPLOYED_AT,
+  fromBlock: DEPLOYED_AT,
   expectedTimeTillCompletion: 60
 };
 
@@ -85,6 +85,7 @@ describe("trustAllNewBackers", () => {
       BACKING_FACTORY_ADDRESS,
       DEPLOYED_AT,
       SAFE_HEAD,
+      false,
       deps.logger
     );
 
@@ -113,6 +114,7 @@ describe("trustAllNewBackers", () => {
       BACKING_FACTORY_ADDRESS,
       DEPLOYED_AT,
       SAFE_HEAD,
+      false,
       deps.logger
     );
 
@@ -141,6 +143,7 @@ describe("trustAllNewBackers", () => {
       BACKING_FACTORY_ADDRESS,
       DEPLOYED_AT,
       SAFE_HEAD,
+      false,
       deps.logger
     );
     const grp = deps.groupService as FakeGroupService;
@@ -176,6 +179,7 @@ describe("trustAllNewBackers", () => {
       BACKING_FACTORY_ADDRESS,
       DEPLOYED_AT,
       SAFE_HEAD,
+      false,
       deps.logger
     );
 
@@ -190,6 +194,129 @@ describe("trustAllNewBackers", () => {
 
     expect(grp.calls).toHaveLength(1);
     expect(grp.calls[0].trusteeAddresses.map(x => x.toLowerCase())).toEqual([okEvt.backer.toLowerCase()]);
+  });
+
+  it("untrusts already trusted backers that are now blacklisted", async () => {
+    const blocked = "0xBLOCKED".padEnd(42, "0") as Address;
+    const deps = makeDeps({blacklistingService: new FakeBlacklist(new Set([blocked.toLowerCase()]))});
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    (rpc as FakeCirclesRpc).trusteesByTruster[GROUP.toLowerCase()] = [blocked];
+
+    const res = await trustAllNewBackers(
+      deps.circlesRpc,
+      deps.blacklistingService,
+      deps.groupService,
+      GROUP,
+      BACKING_FACTORY_ADDRESS,
+      DEPLOYED_AT,
+      SAFE_HEAD,
+      false,
+      deps.logger
+    );
+
+    const grp = deps.groupService as FakeGroupService;
+    expect(res.newBackingEvents.length).toBe(0);
+    expect(grp.calls).toHaveLength(1);
+    expect(grp.calls[0]).toEqual({
+      type: "untrust",
+      groupAddress: GROUP,
+      trusteeAddresses: [blocked.toLowerCase()]
+    });
+  });
+
+  it("untrusts before trusting when both apply", async () => {
+    const blocked = "0xBLOCKED".padEnd(42, "0") as Address;
+    const deps = makeDeps({blacklistingService: new FakeBlacklist(new Set([blocked.toLowerCase()]))});
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    (rpc as FakeCirclesRpc).trusteesByTruster[GROUP.toLowerCase()] = [blocked];
+
+    const okBacker = mkCompleted({backer: "0xOK".padEnd(42, "0") as Address, blockNumber: DEPLOYED_AT + 1});
+    rpc.completed = [okBacker];
+
+    await trustAllNewBackers(
+      deps.circlesRpc,
+      deps.blacklistingService,
+      deps.groupService,
+      GROUP,
+      BACKING_FACTORY_ADDRESS,
+      DEPLOYED_AT,
+      SAFE_HEAD,
+      false,
+      deps.logger
+    );
+
+    const grp = deps.groupService as FakeGroupService;
+    expect(grp.calls).toHaveLength(2);
+    expect(grp.calls[0].type).toBe("untrust");
+    expect(grp.calls[0].trusteeAddresses).toEqual([blocked.toLowerCase()]);
+    expect(grp.calls[1].type).toBe("trust");
+    expect(grp.calls[1].trusteeAddresses).toEqual([okBacker.backer]);
+  });
+
+  it("keeps already-trusted addresses that have no new backing event", async () => {
+    const deps = makeDeps();
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    const grp = deps.groupService as FakeGroupService;
+
+    const actualBacker = mkCompleted({backer: "0xBACKER".padEnd(42, "0") as Address, blockNumber: DEPLOYED_AT + 1});
+    rpc.completed = [actualBacker];
+
+    const extra = "0xEXTRA".padEnd(42, "0");
+    (rpc as FakeCirclesRpc).trusteesByTruster[GROUP.toLowerCase()] = [
+      actualBacker.backer,
+      extra
+    ];
+
+    await trustAllNewBackers(
+      deps.circlesRpc,
+      deps.blacklistingService,
+      deps.groupService,
+      GROUP,
+      BACKING_FACTORY_ADDRESS,
+      DEPLOYED_AT,
+      SAFE_HEAD,
+      false,
+      deps.logger
+    );
+
+    expect(grp.calls).toHaveLength(0);
+  });
+
+  it("logs trust and untrust targets during dry-run mode", async () => {
+    const blocked = "0xBLOCKED".padEnd(42, "0") as Address;
+    const deps = makeDeps({blacklistingService: new FakeBlacklist(new Set([blocked.toLowerCase()]))});
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    const logger = deps.logger as FakeLogger;
+    const grp = deps.groupService as FakeGroupService;
+
+    (rpc as FakeCirclesRpc).trusteesByTruster[GROUP.toLowerCase()] = [blocked];
+
+    const okBacker = mkCompleted({backer: "0xOK".padEnd(42, "0") as Address, blockNumber: DEPLOYED_AT + 3});
+    rpc.completed = [okBacker];
+
+    await trustAllNewBackers(
+      deps.circlesRpc,
+      deps.blacklistingService,
+      deps.groupService,
+      GROUP,
+      BACKING_FACTORY_ADDRESS,
+      DEPLOYED_AT,
+      SAFE_HEAD,
+      true,
+      deps.logger
+    );
+
+    const infoMessages = logger.logs
+      .filter((entry) => entry.level === "info")
+      .flatMap((entry) => entry.args.map((arg) => String(arg)));
+
+    expect(infoMessages.some((msg) =>
+      msg.includes("DRY RUN untrust batch") && msg.toLowerCase().includes(blocked.toLowerCase())
+    )).toBe(true);
+    expect(infoMessages.some((msg) =>
+      msg.includes("DRY RUN trust batch") && msg.toLowerCase().includes(okBacker.backer.toLowerCase())
+    )).toBe(true);
+    expect(grp.calls).toHaveLength(0);
   });
 });
 
@@ -280,6 +407,39 @@ describe("runOnce – reconciliation flow", () => {
 
     expect(svc.resetCalls).toEqual([initiated.circlesBackingInstance.toLowerCase()]);
     expect(svc.createCalls).toEqual([]);
+  });
+
+  it("supports dry-run mode by skipping trust + tx calls", async () => {
+    const deps = makeDeps();
+    const rpc = deps.circlesRpc as FakeCirclesRpc;
+    const svc = deps.cowSwapService as FakeBackingInstanceService;
+    const grp = deps.groupService as FakeGroupService;
+    const slack = deps.slackService as FakeSlack;
+
+    const trustedBacker = mkCompleted({
+      backer: "0xAAA".padEnd(42, "0") as Address,
+      blockNumber: DEPLOYED_AT + 21
+    });
+    rpc.completed = [trustedBacker];
+
+    const inst = "0xinstDryRun".padEnd(42, "1");
+    const pending = mkInitiated({
+      backer: "0xBBB".padEnd(42, "0") as Address,
+      circlesBackingInstance: inst as Address,
+      blockNumber: DEPLOYED_AT + 22,
+      timestamp: HEAD.timestamp - 120
+    });
+    rpc.initiated = [pending];
+
+    svc.simulateReset[inst.toLowerCase()] = "OrderValid";
+    svc.simulateCreate[inst.toLowerCase()] = "Success";
+
+    await runOnce(deps, {...CFG, dryRun: true});
+
+    expect(grp.calls).toHaveLength(0);
+    expect(svc.resetCalls).toHaveLength(0);
+    expect(svc.createCalls).toHaveLength(0);
+    expect(slack.notifications).toHaveLength(0);
   });
 
   it("past on-chain deadline: simulateCreate Success → createLbp", async () => {
@@ -505,4 +665,3 @@ describe("runOnce – reconciliation flow", () => {
     expect(slack.notifications[0].reason).toMatch(/OrderNotYetFilled inconsistency/);
   });
 });
-

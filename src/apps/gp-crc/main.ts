@@ -2,9 +2,10 @@ import {ChainRpcService} from "../../services/chainRpcService";
 import {BlacklistingService} from "../../services/blacklistingService";
 import {LoggerService} from "../../services/loggerService";
 import {SlackService} from "../../services/slackService";
-import {GroupService} from "../../services/groupService";
 import {MetriSafeService} from "../../services/metriSafeService";
 import {CirclesRpcService} from "../../services/circlesRpcService";
+import {SafeGroupService} from "../../services/safeGroupService";
+import {IGroupService} from "../../interfaces/IGroupService";
 import {
   runOnce,
   RunConfig,
@@ -21,7 +22,8 @@ const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const groupAddress = process.env.GP_CRC_GROUP_ADDRESS || "0xb629a1e86f3efada0f87c83494da8cc34c3f84ef";
-const servicePrivateKey = process.env.GP_CRC_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
+const safeAddress = process.env.GP_CRC_SAFE_ADDRESS || "";
+const safeSignerPrivateKey = process.env.GP_CRC_SAFE_SIGNER_PRIVATE_KEY || "";
 const dryRun = process.env.DRY_RUN === "1";
 const metriSafeGraphqlUrl = process.env.METRI_SAFE_GRAPHQL_URL || "https://gnosis-e702590.dedicated.hyperindex.xyz/v1/graphql" ;
 const metriSafeApiKey = process.env.METRI_SAFE_API_KEY || "";
@@ -38,7 +40,7 @@ const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
-let groupService: GroupService | undefined;
+let groupService: IGroupService | undefined;
 let avatarSafeService: MetriSafeService;
 
 if (!groupAddress) {
@@ -51,12 +53,16 @@ if (!metriSafeGraphqlUrl) {
 
 avatarSafeService = new MetriSafeService(metriSafeGraphqlUrl, metriSafeApiKey || undefined);
 
-if (!dryRun && servicePrivateKey.trim().length === 0) {
-  throw new Error("GP_CRC_SERVICE_PRIVATE_KEY (or SERVICE_PRIVATE_KEY) is required when not running gp-crc in dry-run mode");
+if (!dryRun && safeSignerPrivateKey.trim().length === 0) {
+  throw new Error("GP_CRC_SAFE_SIGNER_PRIVATE_KEY is required when not running gp-crc in dry-run mode");
+}
+
+if (!dryRun && safeAddress.trim().length === 0) {
+  throw new Error("GP_CRC_SAFE_ADDRESS is required when not running gp-crc in dry-run mode");
 }
 
 if (!dryRun) {
-  groupService = new GroupService(rpcUrl, servicePrivateKey);
+  groupService = new SafeGroupService(rpcUrl, safeSignerPrivateKey, safeAddress);
 }
 
 const runLogger = rootLogger.child("run");
@@ -81,6 +87,8 @@ rootLogger.info(`  - groupAddress=${groupAddress}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
 rootLogger.info(`  - metriSafeGraphqlUrl=${metriSafeGraphqlUrl}`);
 rootLogger.info(`  - metriSafeApiKeyConfigured=${metriSafeApiKey.trim().length > 0}`);
+rootLogger.info(`  - safeAddress=${safeAddress || "(not set)"}`);
+rootLogger.info(`  - safeSignerConfigured=${safeSignerPrivateKey.trim().length > 0}`);
 rootLogger.info(`  - dryRun=${dryRun}`);
 
 void notifySlackStartup();
@@ -161,12 +169,14 @@ mainLoop().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const pollIntervalMinutes = formatMinutes(pollIntervalMs);
-  const startupMessage = `✅ **GP-CRC TMS Service started**\n\n` +
+    const startupMessage = `✅ **GP-CRC TMS Service started**\n\n` +
     `Monitoring CRC avatars who also have a GP account in Metri.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
     `- Start Block: ${startAtBlock}\n` +
     `- Metri Safe GraphQL: ${metriSafeGraphqlUrl}\n` +
+    `- Safe: ${safeAddress || "(not set)"}\n` +
+    `- Safe signer configured: ${safeSignerPrivateKey.trim().length > 0}\n` +
     `- Poll Interval (minutes): ${pollIntervalMinutes}\n` +
     `- Group: ${groupAddress}\n` +
     `- Dry Run: ${dryRun}`;
