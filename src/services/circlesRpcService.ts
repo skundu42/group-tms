@@ -1,10 +1,31 @@
 import {CirclesData, CirclesRpc} from "@circles-sdk/data";
 import {Address} from "@circles-sdk/utils";
 import {CrcV2_CirclesBackingCompleted, CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
+import {getAddress, Interface, JsonRpcProvider} from "ethers";
 import {ICirclesRpc} from "../interfaces/ICirclesRpc";
 
+const CIRCLES_HUB_ADDRESS = getAddress("0xc12C1E50ABB450d6205Ea2C3Fa861b3B834d13e8");
+const CIRCLES_HUB_INTERFACE = new Interface([
+  "function isHuman(address account) view returns (bool)"
+]);
+
 export class CirclesRpcService implements ICirclesRpc {
+  private readonly provider: JsonRpcProvider;
+
   constructor(private rpcUrl: string) {
+    this.provider = new JsonRpcProvider(rpcUrl);
+  }
+
+  async isHuman(address: string): Promise<boolean> {
+    const normalized = getAddress(address);
+    const data = CIRCLES_HUB_INTERFACE.encodeFunctionData("isHuman", [normalized]);
+    const result = await this.provider.call({
+      to: CIRCLES_HUB_ADDRESS,
+      data
+    });
+
+    const [isHuman] = CIRCLES_HUB_INTERFACE.decodeFunctionResult("isHuman", result);
+    return Boolean(isHuman);
   }
 
   async fetchAllTrustees(truster: string): Promise<string[]> {

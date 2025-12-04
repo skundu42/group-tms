@@ -33,4 +33,10 @@ export interface ICirclesRpc {
    * @returns A promise that resolves to an array of base group addresses.
    */
   fetchAllBaseGroups(pageSize?: number): Promise<string[]>;
+
+  /**
+   * Returns true when the provided address is a human avatar according to the Circles hub.
+   * @param address The address to check.
+   */
+  isHuman(address: string): Promise<boolean>;
 }
