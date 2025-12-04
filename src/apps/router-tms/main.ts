@@ -24,7 +24,8 @@ const enableBatchSize = parseEnvInt("ROUTER_ENABLE_BATCH_SIZE", DEFAULT_ENABLE_B
 const fetchPageSize = parseEnvInt("ROUTER_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
 const blacklistChunkSize = parseEnvInt("ROUTER_BLACKLIST_CHUNK_SIZE", DEFAULT_BLACKLIST_CHUNK_SIZE);
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
-const servicePrivateKey = process.env.ROUTER_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
+const safeAddress = process.env.ROUTER_SAFE_ADDRESS || "";
+const safeSignerPrivateKey = process.env.ROUTER_SAFE_SIGNER_PRIVATE_KEY || "";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
 
 const rootLogger = new LoggerService(verboseLogging, "router-tms");
@@ -36,10 +37,13 @@ const enablementStore = new InMemoryRouterEnablementStore();
 
 let routerService: RouterService | undefined;
 if (!dryRun) {
-  if (!servicePrivateKey || servicePrivateKey.trim().length === 0) {
-    throw new Error("ROUTER_SERVICE_PRIVATE_KEY (or SERVICE_PRIVATE_KEY) is required when router-tms is not in dry-run mode.");
+  if (!safeSignerPrivateKey || safeSignerPrivateKey.trim().length === 0) {
+    throw new Error("ROUTER_SAFE_SIGNER_PRIVATE_KEY is required when router-tms is not in dry-run mode.");
   }
-  routerService = new RouterService(rpcUrl, routerAddress, servicePrivateKey);
+  if (!safeAddress || safeAddress.trim().length === 0) {
+    throw new Error("ROUTER_SAFE_ADDRESS is required when router-tms is not in dry-run mode.");
+  }
+  routerService = new RouterService(rpcUrl, routerAddress, safeSignerPrivateKey, safeAddress);
 }
 
 const config: RunConfig = {
@@ -133,6 +137,8 @@ async function notifySlackStartup(): Promise<void> {
     `- Router: ${routerAddress}\n` +
     `- Base Group: ${baseGroupAddress}\n` +
     `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
+    `- Safe: ${safeAddress || "(not set)"}\n` +
+    `- Safe signer configured: ${safeSignerPrivateKey.trim().length > 0}\n` +
     `- Poll Interval (minutes): ${pollIntervalMinutes}\n` +
     `- Dry Run: ${dryRun}`;
 

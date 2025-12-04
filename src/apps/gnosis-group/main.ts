@@ -26,7 +26,7 @@ const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "0xC19BC204eb1c1D5B3FE500E5E5dfaBaB625F286c";
 const backersGroupAddress = process.env.GNOSIS_GROUP_BACKERS_GROUP_ADDRESS || DEFAULT_BACKERS_GROUP_ADDRESS;
-const safeAddress = process.env.GNOSIS_GROUP_SAFE_ADDRESS || process.env.SAFE_ADDRESS || "";
+const safeAddress = process.env.GNOSIS_GROUP_SAFE_ADDRESS || "";
 const safeSignerPrivateKey = process.env.GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY || "";
 const dryRun = process.env.DRY_RUN === "1";
 const slackWebhookUrl = process.env.GNOSIS_GROUP_SLACK_WEBHOOK_URL || "";
@@ -52,11 +52,11 @@ const runLogger = rootLogger.child("run");
 let groupService: IGroupService | undefined;
 
 if (!dryRun && safeSignerPrivateKey.trim().length === 0) {
-  throw new Error("GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY (or GNOSIS_GROUP_SERVICE_PRIVATE_KEY / SERVICE_PRIVATE_KEY) is required when not running gnosis-group in dry-run mode");
+  throw new Error("GNOSIS_GROUP_SAFE_SIGNER_PRIVATE_KEY is required when not running gnosis-group in dry-run mode");
 }
 
 if (!dryRun && safeAddress.trim().length === 0) {
-  throw new Error("GNOSIS_GROUP_SAFE_ADDRESS (or SAFE_ADDRESS) is required when not running gnosis-group in dry-run mode");
+  throw new Error("GNOSIS_GROUP_SAFE_ADDRESS is required when not running gnosis-group in dry-run mode");
 }
 
 if (!dryRun) {
