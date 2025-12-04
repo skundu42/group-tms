@@ -1,16 +1,18 @@
 import {runIncremental, type IncrementalState, createInitialIncrementalState} from "./logic";
 import {CirclesRpcService} from "../../services/circlesRpcService";
 import {ChainRpcService} from "../../services/chainRpcService";
-import {GroupService} from "../../services/groupService";
+import {SafeGroupService} from "../../services/safeGroupService";
 import {AffiliateGroupEventsService} from "../../services/affiliateGroupEventsService";
 import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
+import {IGroupService} from "../../interfaces/IGroupService";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const oicGroupAddress = (process.env.OIC_GROUP_ADDRESS || "0x4E2564e5df6C1Fb10C1A018538de36E4D5844DE5").toLowerCase();
 const metaOrgAddress = (process.env.OIC_META_ORG_ADDRESS || "").toLowerCase();
 const affiliateRegistryAddress = (process.env.AFFILIATE_REGISTRY_ADDRESS || "0xca8222e780d046707083f51377b5fd85e2866014").toLowerCase();
-const servicePrivateKey = process.env.OIC_SERVICE_PRIVATE_KEY || process.env.SERVICE_PRIVATE_KEY || "";
+const safeAddress = (process.env.OIC_SAFE_ADDRESS || "").toLowerCase();
+const safeSignerPrivateKey = process.env.OIC_SAFE_SIGNER_PRIVATE_KEY || "";
 const deployedAtBlock = Number.parseInt(process.env.START_AT_BLOCK || "41734312");
 const confirmationBlocks = Number.parseInt(process.env.CONFIRMATION_BLOCKS || "10");
 const refreshIntervalSec = Number.parseInt(process.env.REFRESH_INTERVAL_SEC || "60");
@@ -21,17 +23,37 @@ const outputBatchSize = 20;
 const rootLogger = new LoggerService(verboseLogging);
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const chainRpc = new ChainRpcService(rpcUrl);
-const groupService = new GroupService(rpcUrl, servicePrivateKey);
+let groupService: IGroupService;
 const affiliateRegistry = new AffiliateGroupEventsService(rpcUrl);
 
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = !!slackWebhookUrl;
 
+validateConfig();
+
+if (dryRun) {
+  groupService = createDryRunGroupService();
+} else {
+  groupService = new SafeGroupService(rpcUrl, safeSignerPrivateKey, safeAddress);
+}
+
 function validateConfig() {
   if (!oicGroupAddress) throw new Error("OIC_GROUP_ADDRESS is required");
   if (!metaOrgAddress) throw new Error("OIC_META_ORG_ADDRESS is required");
-  if (!servicePrivateKey && !dryRun) throw new Error("OIC_SERVICE_PRIVATE_KEY (or SERVICE_PRIVATE_KEY) is required when not in dry-run");
+  if (!safeAddress && !dryRun) throw new Error("OIC_SAFE_ADDRESS is required when not in dry-run");
+  if (!safeSignerPrivateKey && !dryRun) throw new Error("OIC_SAFE_SIGNER_PRIVATE_KEY is required when not in dry-run");
+}
+
+function createDryRunGroupService(): IGroupService {
+  const notAvailable = async () => {
+    throw new Error("Group service is not available in dry-run mode");
+  };
+  return {
+    trustBatchWithConditions: notAvailable,
+    untrustBatch: notAvailable,
+    fetchGroupOwnerAndService: notAvailable
+  };
 }
 
 process.on('SIGTERM', async () => {
@@ -78,6 +100,8 @@ process.on('unhandledRejection', async (reason: any) => {
       `- Group: ${oicGroupAddress}\n` +
       `- MetaOrg: ${metaOrgAddress}\n` +
       `- AffiliateRegistry: ${affiliateRegistryAddress}\n` +
+      `- Safe: ${safeAddress || "(not set)"}\n` +
+      `- Safe signer configured: ${safeSignerPrivateKey.trim().length > 0}\n` +
       `- Start Block: ${deployedAtBlock}\n` +
       `- Confirmations: ${confirmationBlocks}\n` +
       `- Refresh (s): ${refreshIntervalSec}\n` +
@@ -113,6 +137,7 @@ async function loop() {
         LOG.debug(`Group: ${oicGroupAddress}`);
         LOG.debug(`MetaOrg: ${metaOrgAddress}`);
         LOG.debug(`AffiliateRegistry: ${affiliateRegistryAddress}`);
+        LOG.debug(`Safe: ${safeAddress}`);
         LOG.debug(`DryRun: ${dryRun}`);
         printedStartupLogs = true;
       }

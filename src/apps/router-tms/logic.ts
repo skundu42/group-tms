@@ -43,10 +43,13 @@ export type RunOutcome = {
   txHashes: string[];
 };
 
+type EnableTarget = {baseGroup: string; addresses: string[]; source?: "base-group" | "fallback"};
+
 export const DEFAULT_ENABLE_BATCH_SIZE = 10;
 export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
 export const DEFAULT_BLACKLIST_CHUNK_SIZE = 500;
 export const DEFAULT_BASE_GROUP_ADDRESS = "0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026";
+const HUMANITY_CHECK_BATCH_SIZE = 50;
 
 export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   const {circlesRpc, blacklistingService, routerService, logger, enablementStore} = deps;
@@ -69,6 +72,9 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   const enableBatchSize = Math.max(1, cfg.enableBatchSize ?? DEFAULT_ENABLE_BATCH_SIZE);
   const fetchPageSize = Math.max(1, cfg.fetchPageSize ?? DEFAULT_FETCH_PAGE_SIZE);
   const blacklistChunkSize = Math.max(1, cfg.blacklistChunkSize ?? DEFAULT_BLACKLIST_CHUNK_SIZE);
+  const isHuman = createIsHumanChecker(circlesRpc);
+
+  await assertBaseGroupIsGroupAvatar(baseGroupAddress, isHuman, logger);
 
   logger.info("Fetching human avatars from RegisterHuman table...");
   const allHumanAvatars = await fetchAllHumanAvatars(cfg.rpcUrl, fetchPageSize, logger);
@@ -76,84 +82,92 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   const uniqueHumanAvatars = Array.from(new Set(allHumanAvatars));
   logger.info(`Fetched ${totalAvatarEntries} avatar row(s) (${uniqueHumanAvatars.length} unique).`);
 
-  if (uniqueHumanAvatars.length === 0) {
-    return {
-      totalAvatarEntries,
-      uniqueHumanCount: 0,
-      allowedHumanCount: 0,
-      blacklistedHumanCount: 0,
-      alreadyTrustedCount: 0,
-      pendingEnableCount: 0,
-      executedEnableCount: 0,
-      dryRun,
-      txHashes: []
-    };
-  }
-
   logger.info(`Evaluating blacklist for ${uniqueHumanAvatars.length} unique avatar(s)...`);
-  const {allowed: allowedAvatars, blacklisted: blacklistedAvatars} = await partitionBlacklistedAddresses(
+  const {allowed: allowedHumanAvatars, blacklisted: blacklistedHumanAvatars} = await partitionBlacklistedAddresses(
     blacklistingService,
     uniqueHumanAvatars,
     blacklistChunkSize,
     logger
   );
   logger.info(
-    `Blacklist evaluation complete. Allowed: ${allowedAvatars.length}, blacklisted: ${blacklistedAvatars.length}.`
+    `Blacklist evaluation complete. Allowed: ${allowedHumanAvatars.length}, blacklisted: ${blacklistedHumanAvatars.length}.`
   );
-
-  if (allowedAvatars.length === 0) {
-    return {
-      totalAvatarEntries,
-      uniqueHumanCount: uniqueHumanAvatars.length,
-      allowedHumanCount: 0,
-      blacklistedHumanCount: blacklistedAvatars.length,
-      alreadyTrustedCount: 0,
-      pendingEnableCount: 0,
-      executedEnableCount: 0,
-      dryRun,
-      txHashes: []
-    };
-  }
 
   logger.info(`Fetching router trust list for ${routerAddress}...`);
   const routerTrustees = await circlesRpc.fetchAllTrustees(routerAddress);
   const routerTrustSet = new Set(normalizeAddressArray(routerTrustees));
   logger.info(`Router already trusts ${routerTrustSet.size} address(es).`);
 
-  const alreadyTrusted = allowedAvatars.filter((address) => routerTrustSet.has(address));
+  const alreadyTrusted = allowedHumanAvatars.filter((address) => routerTrustSet.has(address));
   const previouslyEnabled = new Set(normalizeAddressArray(await enablementStore.loadEnabledAddresses()));
-  const pendingAllowedAvatars = allowedAvatars.filter((address) => !previouslyEnabled.has(address));
 
-  if (pendingAllowedAvatars.length === 0) {
-    logger.info("Every allowed human avatar has already been enabled for routing.");
-    return {
-      totalAvatarEntries,
-      uniqueHumanCount: uniqueHumanAvatars.length,
-      allowedHumanCount: allowedAvatars.length,
-      blacklistedHumanCount: blacklistedAvatars.length,
-      alreadyTrustedCount: alreadyTrusted.length,
-      pendingEnableCount: 0,
-      executedEnableCount: 0,
-      dryRun,
-      txHashes: []
-    };
+  const allowedHumanSet = new Set(allowedHumanAvatars);
+  const blacklistedSet = new Set(blacklistedHumanAvatars);
+  const avatarBaseGroupAssignments = await buildAvatarBaseGroupAssignments(circlesRpc, logger);
+  const baseGroupAvatars = Array.from(avatarBaseGroupAssignments.keys());
+  const unknownBaseGroupAvatars = baseGroupAvatars.filter(
+    (avatar) => !allowedHumanSet.has(avatar) && !blacklistedSet.has(avatar)
+  );
+
+  const allowedBaseGroupAvatars = new Set<string>(allowedHumanSet);
+  const blacklistedBaseGroupAvatars = new Set<string>(blacklistedSet);
+
+  if (unknownBaseGroupAvatars.length > 0) {
+    logger.info(
+      `Evaluating blacklist for ${unknownBaseGroupAvatars.length} base group member(s) not present in RegisterHuman table...`
+    );
+    const {allowed, blacklisted} = await partitionBlacklistedAddresses(
+      blacklistingService,
+      unknownBaseGroupAvatars,
+      blacklistChunkSize,
+      logger
+    );
+    allowed.forEach((address) => allowedBaseGroupAvatars.add(address));
+    blacklisted.forEach((address) => blacklistedBaseGroupAvatars.add(address));
   }
 
-  const avatarBaseGroupAssignments = await buildAvatarBaseGroupAssignments(circlesRpc, logger);
-  const enableTargets = buildEnableTargets(
-    pendingAllowedAvatars,
+  const eligibilityFilter = (avatar: string): boolean =>
+    !routerTrustSet.has(avatar) && !previouslyEnabled.has(avatar);
+
+  const {
+    targets: baseGroupEnableTargets,
+    scheduledAvatars: baseGroupScheduledAvatars
+  } = buildBaseGroupEnableTargets(
     avatarBaseGroupAssignments,
-    baseGroupAddress
+    allowedBaseGroupAvatars,
+    blacklistedBaseGroupAvatars,
+    eligibilityFilter
   );
-  const pendingEnableCount = enableTargets.reduce((sum, target) => sum + target.addresses.length, 0);
+
+  const remainingHumanAvatars = allowedHumanAvatars.filter(
+    (avatar) => eligibilityFilter(avatar) && !baseGroupScheduledAvatars.has(avatar)
+  );
+
+  const enableTargets: EnableTarget[] = [...baseGroupEnableTargets];
+  if (remainingHumanAvatars.length > 0) {
+    enableTargets.push({baseGroup: baseGroupAddress, addresses: remainingHumanAvatars, source: "fallback"});
+  }
+
+  const {validTargets, nonHumanAvatars} = await validateEnableTargets(
+    enableTargets,
+    isHuman,
+    baseGroupAddress,
+    logger
+  );
+
+  if (nonHumanAvatars.size > 0) {
+    logger.warn(`Skipped ${nonHumanAvatars.size} avatar(s) flagged as non-human by the Circles hub.`);
+  }
+
+  const pendingEnableCount = validTargets.reduce((sum, target) => sum + target.addresses.length, 0);
 
   if (pendingEnableCount === 0) {
-    logger.info("Router already trusts every allowed human avatar.");
+    logger.info("No eligible human avatars remain for routing after blacklist and hub validation.");
     return {
       totalAvatarEntries,
       uniqueHumanCount: uniqueHumanAvatars.length,
-      allowedHumanCount: allowedAvatars.length,
-      blacklistedHumanCount: blacklistedAvatars.length,
+      allowedHumanCount: allowedHumanAvatars.length,
+      blacklistedHumanCount: blacklistedHumanAvatars.length,
       alreadyTrustedCount: alreadyTrusted.length,
       pendingEnableCount: 0,
       executedEnableCount: 0,
@@ -162,14 +176,26 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     };
   }
 
-  logger.info(
-    `Need to enable routing for ${pendingEnableCount} human avatar(s) across ${enableTargets.length} base group target(s).`
-  );
+  const baseGroupTargets = validTargets.filter((target) => target.source === "base-group");
+  if (baseGroupTargets.length > 0) {
+    const baseGroupAvatarCount = baseGroupTargets.reduce((sum, target) => sum + target.addresses.length, 0);
+    logger.info(
+      `Need to enable routing for ${baseGroupAvatarCount} base group member(s) across ${baseGroupTargets.length} base group target(s).`
+    );
+  }
+
+  const fallbackTargets = validTargets.filter((target) => target.source === "fallback");
+  if (fallbackTargets.length > 0) {
+    const fallbackAvatarCount = fallbackTargets.reduce((sum, target) => sum + target.addresses.length, 0);
+    logger.info(
+      `Need to enable routing for ${fallbackAvatarCount} remaining human avatar(s) in default base group ${baseGroupAddress}.`
+    );
+  }
 
   const txHashes: string[] = [];
   let executedEnableCount = 0;
 
-  for (const target of enableTargets) {
+  for (const target of validTargets) {
     const batches = chunkArray(target.addresses, enableBatchSize);
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
       const batch = batches[batchIndex];
@@ -195,8 +221,8 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   return {
     totalAvatarEntries,
     uniqueHumanCount: uniqueHumanAvatars.length,
-    allowedHumanCount: allowedAvatars.length,
-    blacklistedHumanCount: blacklistedAvatars.length,
+    allowedHumanCount: allowedHumanAvatars.length,
+    blacklistedHumanCount: blacklistedHumanAvatars.length,
     alreadyTrustedCount: alreadyTrusted.length,
     pendingEnableCount,
     executedEnableCount: dryRun ? 0 : executedEnableCount,
@@ -326,6 +352,107 @@ function normalizeAddressArray(addresses: string[]): string[] {
   return Array.from(unique);
 }
 
+function createIsHumanChecker(circlesRpc: ICirclesRpc): (address: string) => Promise<boolean> {
+  const cache = new Map<string, Promise<boolean>>();
+  return async (address: string): Promise<boolean> => {
+    const normalized = normalizeAddress(address);
+    if (!normalized) {
+      throw new Error(`Invalid address passed to isHuman check: '${address ?? ""}'`);
+    }
+
+    const cached = cache.get(normalized);
+    if (cached) {
+      return cached;
+    }
+
+    const lookup = circlesRpc.isHuman(normalized).catch((error) => {
+      cache.delete(normalized);
+      throw error;
+    });
+
+    cache.set(normalized, lookup);
+    return lookup;
+  };
+}
+
+async function filterHumanAvatars(
+  addresses: string[],
+  isHuman: (address: string) => Promise<boolean>,
+  batchSize: number
+): Promise<{humans: string[]; nonHumans: string[]}> {
+  const humans: string[] = [];
+  const nonHumans: string[] = [];
+
+  for (let i = 0; i < addresses.length; i += batchSize) {
+    const batch = addresses.slice(i, i + batchSize);
+    const verdicts = await Promise.all(batch.map((address) => isHuman(address)));
+
+    for (let j = 0; j < batch.length; j += 1) {
+      const address = batch[j];
+      if (verdicts[j]) {
+        humans.push(address);
+      } else {
+        nonHumans.push(address);
+      }
+    }
+  }
+
+  return {humans, nonHumans};
+}
+
+async function validateEnableTargets(
+  enableTargets: EnableTarget[],
+  isHuman: (address: string) => Promise<boolean>,
+  defaultBaseGroup: string,
+  logger: ILoggerService
+): Promise<{validTargets: EnableTarget[]; nonHumanAvatars: Set<string>}> {
+  const validTargets: EnableTarget[] = [];
+  const nonHumanAvatars = new Set<string>();
+  const defaultBaseGroupLc = defaultBaseGroup.toLowerCase();
+
+  for (const target of enableTargets) {
+    const baseGroupIsHuman = await isHuman(target.baseGroup);
+    if (baseGroupIsHuman) {
+      const message = `Base group ${target.baseGroup} is a human avatar according to the Circles hub contract.`;
+      if (target.baseGroup.toLowerCase() === defaultBaseGroupLc) {
+        throw new Error(message);
+      }
+
+      logger.error(`${message} Skipping this base group.`);
+      continue;
+    }
+
+    const {humans, nonHumans} = await filterHumanAvatars(target.addresses, isHuman, HUMANITY_CHECK_BATCH_SIZE);
+    nonHumans.forEach((avatar) => nonHumanAvatars.add(avatar));
+
+    if (nonHumans.length > 0) {
+      logger.warn(`Skipping ${nonHumans.length} non-human avatar(s) for base group ${target.baseGroup}.`);
+    }
+
+    if (humans.length === 0) {
+      logger.info(`No human avatars remain for base group ${target.baseGroup} after hub validation.`);
+      continue;
+    }
+
+    validTargets.push({baseGroup: target.baseGroup, addresses: humans, source: target.source});
+  }
+
+  return {validTargets, nonHumanAvatars};
+}
+
+async function assertBaseGroupIsGroupAvatar(
+  baseGroup: string,
+  isHuman: (address: string) => Promise<boolean>,
+  logger: ILoggerService
+): Promise<void> {
+  const baseGroupIsHuman = await isHuman(baseGroup);
+  if (baseGroupIsHuman) {
+    const message = `Base group ${baseGroup} is a human avatar according to the Circles hub contract.`;
+    logger.error(message);
+    throw new Error(message);
+  }
+}
+
 async function buildAvatarBaseGroupAssignments(
   circlesRpc: ICirclesRpc,
   logger: ILoggerService
@@ -349,36 +476,37 @@ async function buildAvatarBaseGroupAssignments(
   return assignment;
 }
 
-function buildEnableTargets(
-  pendingAvatars: string[],
+function buildBaseGroupEnableTargets(
   avatarBaseGroupAssignments: Map<string, string>,
-  fallbackBaseGroup: string
-): {baseGroup: string; addresses: string[]}[] {
+  allowedAvatars: Set<string>,
+  blacklistedAvatars: Set<string>,
+  isEligible: (avatar: string) => boolean
+): {targets: EnableTarget[]; scheduledAvatars: Set<string>} {
   const grouped = new Map<string, string[]>();
-  const fallback: string[] = [];
+  const scheduledAvatars = new Set<string>();
 
-  for (const avatar of pendingAvatars) {
-    const baseGroup = avatarBaseGroupAssignments.get(avatar);
-    if (baseGroup) {
-      if (!grouped.has(baseGroup)) {
-        grouped.set(baseGroup, []);
-      }
-      grouped.get(baseGroup)?.push(avatar);
+  for (const [avatar, baseGroup] of avatarBaseGroupAssignments.entries()) {
+    if (!allowedAvatars.has(avatar) || blacklistedAvatars.has(avatar)) {
       continue;
     }
-    fallback.push(avatar);
+
+    if (!isEligible(avatar)) {
+      continue;
+    }
+
+    if (!grouped.has(baseGroup)) {
+      grouped.set(baseGroup, []);
+    }
+    grouped.get(baseGroup)?.push(avatar);
+    scheduledAvatars.add(avatar);
   }
 
-  const targets: {baseGroup: string; addresses: string[]}[] = [];
+  const targets: EnableTarget[] = [];
   for (const [baseGroup, avatars] of grouped.entries()) {
     if (avatars.length > 0) {
-      targets.push({baseGroup, addresses: avatars});
+      targets.push({baseGroup, addresses: avatars, source: "base-group"});
     }
   }
 
-  if (fallback.length > 0) {
-    targets.push({baseGroup: fallbackBaseGroup, addresses: fallback});
-  }
-
-  return targets;
+  return {targets, scheduledAvatars};
 }

@@ -63,6 +63,7 @@ export class FakeCirclesRpc implements ICirclesRpc {
   trusts: CrcV2_Trust[] = [];
   trusteesByTruster: Record<string, string[]> = {};
   baseGroups: string[] = [];
+  humanityOverrides = new Map<string, boolean>();
 
   async fetchBackingInitiatedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingInitiated[]> {
     const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
@@ -80,6 +81,20 @@ export class FakeCirclesRpc implements ICirclesRpc {
 
   async fetchAllBaseGroups(_pageSize?: number): Promise<string[]> {
     return this.baseGroups;
+  }
+
+  async isHuman(address: string): Promise<boolean> {
+    const normalized = address.toLowerCase();
+    const override = this.humanityOverrides.get(normalized);
+    if (override !== undefined) {
+      return override;
+    }
+
+    if (this.baseGroups.some((group) => group.toLowerCase() === normalized)) {
+      return false;
+    }
+
+    return true;
   }
 }
 

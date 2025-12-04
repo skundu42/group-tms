@@ -11,40 +11,63 @@ export type RunConfig = {
   confirmationBlocks: number;
   backingFactoryAddress: string;
   backersGroupAddress: string;
-  deployedAtBlock: number;
-  expectedTimeTillCompletion: number; 
+  fromBlock: number;
+  expectedTimeTillCompletion: number;
+  dryRun?: boolean;
+};
+
+export type RunResult = {
+  fromBlock: number;
+  toBlock: number;
+  safeHeadBlock: number;
+  nextFromBlock: number;
 };
 
 export type Deps = {
   circlesRpc: ICirclesRpc;
   chainRpc: IChainRpc;
   blacklistingService: IBlacklistingService;
-  groupService: IGroupService;
+  groupService?: IGroupService;
   cowSwapService: IBackingInstanceService;
   slackService: ISlackService;
   logger: ILoggerService;
 };
 
-/**
- * Finds all valid (not blacklisted) backing completed events since the last known block.
- */
+export type TrustBackersResult = {
+  totalBackingEvents: number;
+  validBackingEvents: CrcV2_CirclesBackingCompleted[];
+  blacklistedAddresses: Set<string>;
+  newBackingEvents: CrcV2_CirclesBackingCompleted[];
+  trustedAddresses: string[];
+  untrustedAddresses: string[];
+  trustTxHashes: string[];
+  untrustTxHashes: string[];
+};
+
+const TRUST_BATCH_SIZE = 50;
+
 async function findValidBackingEvents(
   circlesRpc: ICirclesRpc,
   blacklistingService: IBlacklistingService,
   backingFactoryAddress: string,
-  lastKnownBlock: number,
+  fromBlock: number,
   toBlock: number,
-  LOG: ILoggerService
+  LOG: ILoggerService,
+  extraAddressesToCheck: Iterable<string> = []
 ): Promise<{
   totalBackingEvents: number,
   validBackingEvents: CrcV2_CirclesBackingCompleted[],
   blacklistedAddresses: Set<string>
 }> {
-  const newBackingCompletedEvents = await circlesRpc.fetchBackingCompletedEvents(backingFactoryAddress, lastKnownBlock, toBlock);
-  LOG.debug(`Fetched ${newBackingCompletedEvents.length} completed backing events since block ${lastKnownBlock} to block ${toBlock}.`);
+  const newBackingCompletedEvents = await circlesRpc.fetchBackingCompletedEvents(backingFactoryAddress, fromBlock, toBlock);
+  LOG.debug(`Fetched ${newBackingCompletedEvents.length} completed backing events since block ${fromBlock} to block ${toBlock}.`);
 
-  const addressesToCheck = Array.from(new Set(newBackingCompletedEvents.map(e => e.backer.toLowerCase())));
-  const verdicts = await blacklistingService.checkBlacklist(addressesToCheck);
+  const addressesToCheck = new Set<string>();
+  newBackingCompletedEvents.forEach((e) => addressesToCheck.add(e.backer.toLowerCase()));
+  for (const addr of extraAddressesToCheck) {
+    addressesToCheck.add(addr.toLowerCase());
+  }
+  const verdicts = await blacklistingService.checkBlacklist(Array.from(addressesToCheck));
   const blacklistedAddresses = new Set(
     verdicts
       .filter(v => v.is_bot || v.category === "blocked" || v.category === "flagged")
@@ -59,52 +82,87 @@ async function findValidBackingEvents(
 }
 
 export function batchEvents(backingEvents: CrcV2_CirclesBackingCompleted[]) {
-  const trustBatchSize = 50;
   const batches: CrcV2_CirclesBackingCompleted[][] = [];
-  for (let i = 0; i < backingEvents.length; i += trustBatchSize) {
-    batches.push(backingEvents.slice(i, i + trustBatchSize));
+  for (let i = 0; i < backingEvents.length; i += TRUST_BATCH_SIZE) {
+    batches.push(backingEvents.slice(i, i + TRUST_BATCH_SIZE));
   }
   return batches;
 }
 
-/**
- * Trusts all new backers by checking their backing completed events against the blacklisting service
- * and adding them to the Circles Backers group. (Logs only when something happens.)
- */
+function batchAddresses(addresses: string[]) {
+  const batches: string[][] = [];
+  for (let i = 0; i < addresses.length; i += TRUST_BATCH_SIZE) {
+    batches.push(addresses.slice(i, i + TRUST_BATCH_SIZE));
+  }
+  return batches;
+}
+
 export async function trustAllNewBackers(
   circlesRpc: ICirclesRpc,
   blacklistingService: IBlacklistingService,
-  groupService: IGroupService,
+  groupService: IGroupService | undefined,
   groupAddress: string,
   backingFactoryAddress: string,
-  lastKnownBlock: number,
-  currentHead: number,
+  fromBlock: number,
+  toBlock: number,
+  dryRun: boolean,
   LOG: ILoggerService
-): Promise<{
-  totalBackingEvents: number,
-  validBackingEvents: CrcV2_CirclesBackingCompleted[],
-  blacklistedAddresses: Set<string>,
-  newBackingEvents: CrcV2_CirclesBackingCompleted[]
-}> {
-  const backingEvents = await findValidBackingEvents(circlesRpc, blacklistingService, backingFactoryAddress, lastKnownBlock, currentHead, LOG);
+): Promise<TrustBackersResult> {
+  const trustees = new Set((await circlesRpc.fetchAllTrustees(groupAddress)).map((x) => x.toLowerCase()));
+  const backingEvents = await findValidBackingEvents(
+    circlesRpc,
+    blacklistingService,
+    backingFactoryAddress,
+    fromBlock,
+    toBlock,
+    LOG,
+    trustees
+  );
 
   const haveAnyCompletedEvents = backingEvents.totalBackingEvents > 0;
+  const haveBlacklisted = backingEvents.blacklistedAddresses.size > 0;
   if (haveAnyCompletedEvents) {
-    LOG.info(`Found ${backingEvents.totalBackingEvents} completed backing events since block ${lastKnownBlock} to block ${currentHead}.`);
+    LOG.info(`Found ${backingEvents.totalBackingEvents} completed backing events since block ${fromBlock} to block ${toBlock}.`);
     LOG.info(`  - Valid (non-blacklisted): ${backingEvents.validBackingEvents.length}`);
-    const haveBlacklisted = backingEvents.blacklistedAddresses.size > 0;
-    if (haveBlacklisted) {
-      LOG.info(`  - Blacklisted addresses present (hidden; enable verbose to see list).`);
-      LOG.table(Array.from(backingEvents.blacklistedAddresses).map((address) => ({address})));
-    }
+  }
+  if (haveBlacklisted) {
+    LOG.info(`  - Blacklisted addresses present (hidden; enable verbose to see list).`);
+    LOG.table(Array.from(backingEvents.blacklistedAddresses).map((address) => ({address})));
   }
 
-  const trustees = new Set((await circlesRpc.fetchAllTrustees(groupAddress)).map((x) => x.toLowerCase()));
-  const notAlreadyTrusted = backingEvents.validBackingEvents.filter((e) => !trustees.has(e.backer.toLowerCase()));
+  const validBackerEventsByAddress = new Map<string, CrcV2_CirclesBackingCompleted>();
+  for (const event of backingEvents.validBackingEvents) {
+    const backer = event.backer.toLowerCase();
+    if (!validBackerEventsByAddress.has(backer)) {
+      validBackerEventsByAddress.set(backer, event);
+    }
+  }
+  const validBackers = new Set(validBackerEventsByAddress.keys());
+
+  const blacklistedTrusted = Array.from(trustees).filter((addr) => backingEvents.blacklistedAddresses.has(addr));
+  const missingTrusted = Array.from(validBackers).filter((addr) => !trustees.has(addr));
+  const notAlreadyTrusted = missingTrusted.map((addr) => validBackerEventsByAddress.get(addr)!);
+  const toUntrust = Array.from(new Set(blacklistedTrusted));
+
+  if (!dryRun && !groupService) {
+    throw new Error("Group service dependency is required when crc-backers is not running in dry-run mode");
+  }
 
   const willAddAny = notAlreadyTrusted.length > 0;
-  if (haveAnyCompletedEvents) {
-    LOG.info(`  - Already trusted: ${trustees.size}. To add now: ${notAlreadyTrusted.length}.`);
+  const willUntrustAny = toUntrust.length > 0;
+
+  if (haveAnyCompletedEvents || willAddAny || willUntrustAny) {
+    LOG.info(`  - Already trusted: ${trustees.size}. Expected (valid backers): ${validBackers.size}. To add now: ${notAlreadyTrusted.length}. To untrust now: ${toUntrust.length}.`);
+  }
+
+  if (willUntrustAny) {
+    if (blacklistedTrusted.length > 0) {
+      LOG.info(`  - Blacklisted trusted backers to untrust (${blacklistedTrusted.length}):`);
+      for (const addr of blacklistedTrusted) {
+        LOG.info(`    - backer=${addr}`);
+      }
+    }
+
   }
 
   if (willAddAny) {
@@ -125,49 +183,91 @@ export async function trustAllNewBackers(
       ["backer", "instance", "blockNumber", "transactionHash", "timestamp"]
     );
 
-    const batches = batchEvents(notAlreadyTrusted);
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      const backersToTrust = batch.map((e) => e.backer);
+  }
 
-      LOG.debug(`  - Batch ${i + 1}/${batches.length} addresses:`, backersToTrust);
-      LOG.info(`  - Trusting batch ${i + 1}/${batches.length} (${batch.length} backers)...`);
+  const trustBatches = willAddAny ? batchEvents(notAlreadyTrusted) : [];
+  const untrustBatches = willUntrustAny ? batchAddresses(toUntrust) : [];
+  const trustTxHashes: string[] = [];
+  const untrustTxHashes: string[] = [];
 
-      // NOTE: call kept here to reflect real behavior. Your current main.ts had it commented.
-      await groupService.trustBatchWithConditions(groupAddress, backersToTrust);
-
-      LOG.info(`  - Batch ${i + 1}/${batches.length} succeeded.`);
+  if (dryRun || !groupService) {
+    if (willUntrustAny) {
+      LOG.info(`  - Dry-run enabled; would untrust ${toUntrust.length} backers in ${untrustBatches.length} batch(es).`);
+      untrustBatches.forEach((batch, index) => {
+        LOG.info(`    DRY RUN untrust batch ${index + 1}/${untrustBatches.length}: ${batch.length} backers -> ${batch.join(", ")}`);
+      });
+    }
+    if (willAddAny) {
+      LOG.info(`  - Dry-run enabled; would trust ${notAlreadyTrusted.length} backers in ${trustBatches.length} batch(es).`);
+      trustBatches.forEach((batch, index) => {
+        const backersToTrust = batch.map((e) => e.backer);
+        LOG.info(`    DRY RUN trust batch ${index + 1}/${trustBatches.length}: ${batch.length} backers -> ${backersToTrust.join(", ")}`);
+      });
+    }
+  } else {
+    if (willUntrustAny) {
+      for (let i = 0; i < untrustBatches.length; i++) {
+        const batch = untrustBatches[i];
+        LOG.info(`  - Untrusting batch ${i + 1}/${untrustBatches.length} (${batch.length} backers)...`);
+        const txHash = await groupService.untrustBatch(groupAddress, batch);
+        untrustTxHashes.push(txHash);
+        LOG.info(`  - Untrust batch ${i + 1}/${untrustBatches.length} succeeded.`);
+      }
     }
 
-    LOG.info(`[${lastKnownBlock}->${currentHead}] Trusted ${notAlreadyTrusted.length} new backers in ${batchEvents(notAlreadyTrusted).length} batches.`);
+    if (willAddAny) {
+      for (let i = 0; i < trustBatches.length; i++) {
+        const batch = trustBatches[i];
+        const backersToTrust = batch.map((e) => e.backer);
+
+        LOG.debug(`  - Batch ${i + 1}/${trustBatches.length} addresses:`, backersToTrust);
+        LOG.info(`  - Trusting batch ${i + 1}/${trustBatches.length} (${batch.length} backers)...`);
+
+        // NOTE: call kept here to reflect real behavior. Your current main.ts had it commented.
+        const txHash = await groupService.trustBatchWithConditions(groupAddress, backersToTrust);
+        trustTxHashes.push(txHash);
+
+        LOG.info(`  - Batch ${i + 1}/${trustBatches.length} succeeded.`);
+      }
+    }
+  }
+
+  if (willAddAny || willUntrustAny) {
+    const summary: string[] = [];
+    if (willUntrustAny) {
+      summary.push(`${dryRun ? "Would untrust" : "Untrusted"} ${toUntrust.length} backers in ${untrustBatches.length} batch(es)`);
+    }
+    if (willAddAny) {
+      summary.push(`${dryRun ? "Would trust" : "Trusted"} ${notAlreadyTrusted.length} new backers in ${trustBatches.length} batch(es)`);
+    }
+    LOG.info(`[${fromBlock}->${toBlock}] ${summary.join("; ")}.`);
   }
 
   return {
     ...backingEvents,
-    newBackingEvents: notAlreadyTrusted
+    newBackingEvents: notAlreadyTrusted,
+    trustedAddresses: notAlreadyTrusted.map((e) => e.backer),
+    untrustedAddresses: toUntrust,
+    trustTxHashes,
+    untrustTxHashes
   };
 }
 
 /**
- * Finds all pending backing processes that have been initiated but not yet completed since the last known block.
+ * Finds all pending backing processes that have been initiated but not yet completed in the given range.
  */
 export async function findPendingBackingProcesses(
   circlesRpc: ICirclesRpc,
   backingFactoryAddress: string,
-  lastKnownBlock: number,
-  currentHead: number,
-  completedBackingProcesses: {
-    totalBackingEvents: number;
-    validBackingEvents: CrcV2_CirclesBackingCompleted[];
-    blacklistedAddresses: Set<string>;
-    newBackingEvents: CrcV2_CirclesBackingCompleted[];
-  },
+  fromBlock: number,
+  toBlock: number,
+  completedBackingProcesses: Pick<TrustBackersResult, "totalBackingEvents" | "validBackingEvents" | "blacklistedAddresses" | "newBackingEvents">,
   LOG: ILoggerService
 ) {
   const key = (event: CrcV2_CirclesBackingInitiated | CrcV2_CirclesBackingCompleted) =>
     `${event.backer.toLowerCase()}-${event.circlesBackingInstance.toLowerCase()}`;
 
-  const initiatedBackingProcesses = await circlesRpc.fetchBackingInitiatedEvents(backingFactoryAddress, lastKnownBlock, currentHead);
+  const initiatedBackingProcesses = await circlesRpc.fetchBackingInitiatedEvents(backingFactoryAddress, fromBlock, toBlock);
   LOG.debug(`Fetched ${initiatedBackingProcesses.length} initiated backing processes.`);
 
   const completedKeys = new Set(completedBackingProcesses.validBackingEvents.map(key));
@@ -192,22 +292,111 @@ export function computeOrderDeadlineSeconds(initiated: CrcV2_CirclesBackingIniti
   return initiated.timestamp! + oneDaySeconds;
 }
 
-/**
- * One-shot run; pure-logic orchestration that we can test with mocks.
- */
-export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
+function formatAddressBullet(label: string, addresses: string[], limit: number): string {
+  if (addresses.length === 0) {
+    return "";
+  }
+
+  const shown = addresses.slice(0, limit);
+  const remaining = addresses.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${remaining} more)` : "";
+  return `- ${label} (${addresses.length}): ${shown.join(", ")}${suffix}`;
+}
+
+function formatTxBullet(label: string, txHashes: string[], limit: number): string {
+  if (txHashes.length === 0) {
+    return "";
+  }
+
+  const shown = txHashes.slice(0, limit);
+  const remaining = txHashes.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${remaining} more)` : "";
+  return `- ${label}: ${shown.join(", ")}${suffix}`;
+}
+
+async function notifySlackTrustSummary(
+  slackService: ISlackService,
+  outcome: TrustBackersResult,
+  cfg: RunConfig,
+  range: {fromBlock: number; toBlock: number},
+  dryRun: boolean,
+  LOG: ILoggerService
+): Promise<void> {
+  const hasChanges = outcome.trustedAddresses.length > 0 || outcome.untrustedAddresses.length > 0;
+  if (!hasChanges) {
+    return;
+  }
+
+  const header = dryRun
+    ? "🧪 **CRC Backers Dry-Run Summary**"
+    : "✅ **CRC Backers Run Summary**";
+
+  const lines: string[] = [
+    header,
+    "",
+    `- Backers Group: ${cfg.backersGroupAddress}`,
+    `- Factory: ${cfg.backingFactoryAddress}`,
+    `- Mode: ${dryRun ? "Dry Run" : "Live"}`,
+    `- Blocks scanned: ${range.fromBlock}->${range.toBlock}`,
+    `- Valid completed backers: ${outcome.validBackingEvents.length}`
+  ];
+
+  if (outcome.blacklistedAddresses.size > 0) {
+    lines.push(`- Blacklisted this run: ${outcome.blacklistedAddresses.size}`);
+  }
+
+  const trustBullet = formatAddressBullet(dryRun ? "Would trust" : "Trusted", outcome.trustedAddresses, 10);
+  if (trustBullet) {
+    lines.push(trustBullet);
+  }
+
+  if (!dryRun && outcome.trustTxHashes.length > 0) {
+    lines.push(formatTxBullet("Trust tx hash(es)", outcome.trustTxHashes, 5));
+  }
+
+  const untrustBullet = formatAddressBullet(dryRun ? "Would untrust" : "Untrusted", outcome.untrustedAddresses, 10);
+  if (untrustBullet) {
+    lines.push(untrustBullet);
+  }
+
+  if (!dryRun && outcome.untrustTxHashes.length > 0) {
+    lines.push(formatTxBullet("Untrust tx hash(es)", outcome.untrustTxHashes, 5));
+  }
+
+  try {
+    await slackService.notifySlackStartOrCrash(lines.join("\n"));
+  } catch (error) {
+    LOG.warn("Failed to send Slack trust/untrust summary:", error);
+  }
+}
+
+export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunResult> {
   const {
     circlesRpc, chainRpc, blacklistingService, groupService,
     cowSwapService, slackService, logger: LOG
   } = deps;
+  const dryRun = !!cfg.dryRun;
+
+  if (!dryRun && !groupService) {
+    throw new Error("Group service dependency is required when crc-backers is not running in dry-run mode");
+  }
 
   // 0. Head with a small reorg buffer
   const currentHead = await chainRpc.getHeadBlock();
   const safeHeadBlock = Math.max(0, currentHead.blockNumber - cfg.confirmationBlocks /* confirmations */);
   LOG.debug(`Head=${currentHead.blockNumber}, safeHead=${safeHeadBlock}, headTs=${currentHead.timestamp}`);
 
-  // 1. Start from contract deployment
-  const lastKnownBlock = cfg.deployedAtBlock;
+  // 1. Determine range to scan
+  const fromBlock = cfg.fromBlock;
+  if (safeHeadBlock < fromBlock) {
+    LOG.info(`No new safe blocks to scan (fromBlock=${fromBlock}, safeHead=${safeHeadBlock}).`);
+    return {
+      fromBlock,
+      toBlock: safeHeadBlock,
+      safeHeadBlock,
+      nextFromBlock: fromBlock
+    };
+  }
 
   // 2–3–4. Trust all newly completed backers (skipping blacklisted & already trusted).
   const completedBackingProcesses = await trustAllNewBackers(
@@ -216,8 +405,9 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
     groupService,
     cfg.backersGroupAddress,
     cfg.backingFactoryAddress,
-    lastKnownBlock,
+    fromBlock,
     safeHeadBlock,
+    dryRun,
     LOG
   );
 
@@ -225,7 +415,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
   const pendingBackingProcesses = await findPendingBackingProcesses(
     circlesRpc,
     cfg.backingFactoryAddress,
-    lastKnownBlock,
+    fromBlock,
     safeHeadBlock,
     completedBackingProcesses,
     LOG
@@ -233,7 +423,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
 
   const havePending = pendingBackingProcesses.length > 0;
   if (havePending) {
-    LOG.info(`Found ${pendingBackingProcesses.length} pending backing processes since block ${lastKnownBlock} to block ${safeHeadBlock}`);
+    LOG.info(`Found ${pendingBackingProcesses.length} pending backing processes since block ${fromBlock} to block ${safeHeadBlock}`);
     LOG.table(pendingBackingProcesses, ["blockNumber", "transactionHash", "backer", "circlesBackingInstance"]);
   }
 
@@ -263,9 +453,13 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
       const lbpState: CreateLBPResult = await cowSwapService.simulateCreateLbp(event.circlesBackingInstance);
       switch (lbpState) {
         case "Success": {
-          LOG.info(`Creating LBP for ${event.backer} at ${event.circlesBackingInstance}...`);
-          const txHash = await cowSwapService.createLbp(event.circlesBackingInstance);
-          LOG.info(`Creating LBP for ${event.backer} at ${event.circlesBackingInstance} succeeded: ${txHash}`);
+          if (dryRun) {
+            LOG.info(`[DRY RUN] Would create LBP for ${event.backer} at ${event.circlesBackingInstance}.`);
+          } else {
+            LOG.info(`Creating LBP for ${event.backer} at ${event.circlesBackingInstance}...`);
+            const txHash = await cowSwapService.createLbp(event.circlesBackingInstance);
+            LOG.info(`Creating LBP for ${event.backer} at ${event.circlesBackingInstance} succeeded: ${txHash}`);
+          }
           continue;
         }
         case "LBPAlreadyCreated": {
@@ -292,17 +486,25 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
     const orderState: ResetCowSwapOrderResult = await cowSwapService.simulateResetCowSwapOrder(event.circlesBackingInstance);
     switch (orderState) {
       case "OrderValid": {
-        LOG.info(`Resetting order for ${event.backer} at ${event.circlesBackingInstance}...`);
-        const txHash = await cowSwapService.resetCowSwapOrder(event.circlesBackingInstance);
-        LOG.info(`Resetting order for ${event.backer} at ${event.circlesBackingInstance} succeeded: ${txHash}`);
+        if (dryRun) {
+          LOG.info(`[DRY RUN] Would reset order for ${event.backer} at ${event.circlesBackingInstance}.`);
+        } else {
+          LOG.info(`Resetting order for ${event.backer} at ${event.circlesBackingInstance}...`);
+          const txHash = await cowSwapService.resetCowSwapOrder(event.circlesBackingInstance);
+          LOG.info(`Resetting order for ${event.backer} at ${event.circlesBackingInstance} succeeded: ${txHash}`);
+        }
         break;
       }
       case "OrderAlreadySettled": {
         const lbpState = await cowSwapService.simulateCreateLbp(event.circlesBackingInstance);
         if (lbpState === "Success") {
-          LOG.info(`LBP posthook likely missed; creating LBP for ${event.circlesBackingInstance}...`);
-          const txHash = await cowSwapService.createLbp(event.circlesBackingInstance);
-          LOG.info(`LBP created for ${event.circlesBackingInstance}: ${txHash}`);
+          if (dryRun) {
+            LOG.info(`[DRY RUN] Would create LBP for ${event.circlesBackingInstance} after settled order.`);
+          } else {
+            LOG.info(`LBP posthook likely missed; creating LBP for ${event.circlesBackingInstance}...`);
+            const txHash = await cowSwapService.createLbp(event.circlesBackingInstance);
+            LOG.info(`LBP created for ${event.circlesBackingInstance}: ${txHash}`);
+          }
           continue;
         }
         if (lbpState === "LBPAlreadyCreated") {
@@ -329,4 +531,20 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<void> {
         throw new Error(`Unknown order state ${orderState}`);
     }
   }
+
+  await notifySlackTrustSummary(
+    slackService,
+    completedBackingProcesses,
+    cfg,
+    {fromBlock, toBlock: safeHeadBlock},
+    dryRun,
+    LOG
+  );
+
+  return {
+    fromBlock,
+    toBlock: safeHeadBlock,
+    safeHeadBlock,
+    nextFromBlock: safeHeadBlock + 1
+  };
 }

@@ -50,7 +50,10 @@ jest.mock("@circles-sdk/data", () => {
 });
 
 function makeDeps(overrides?: Partial<Deps>): Deps {
-  const circlesRpc = new FakeCirclesRpc();
+  const circlesRpc = overrides?.circlesRpc ?? new FakeCirclesRpc();
+  if (circlesRpc instanceof FakeCirclesRpc) {
+    circlesRpc.humanityOverrides.set(DEFAULT_BASE_GROUP_ADDRESS.toLowerCase(), false);
+  }
   const blacklistingService = new FakeBlacklist();
   const logger = new FakeLogger(true);
   const enablementStore = new FakeRouterEnablementStore();
@@ -131,12 +134,12 @@ describe("router-tms runOnce", () => {
     expect(outcome.allowedHumanCount).toBe(2);
     expect(outcome.blacklistedHumanCount).toBe(1);
     expect(outcome.alreadyTrustedCount).toBe(1);
-    expect(outcome.pendingEnableCount).toBe(2);
-    expect(outcome.executedEnableCount).toBe(2);
+    expect(outcome.pendingEnableCount).toBe(1);
+    expect(outcome.executedEnableCount).toBe(1);
     expect(outcome.txHashes).toEqual(["0xtx_enable"]);
 
     expect(routerService.calls).toEqual([
-      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanAlice.toLowerCase(), humanBob.toLowerCase()]}
+      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]}
     ]);
   });
 
@@ -157,6 +160,38 @@ describe("router-tms runOnce", () => {
     expect(outcome.pendingEnableCount).toBe(2);
     expect(outcome.executedEnableCount).toBe(0);
     expect(outcome.txHashes).toEqual([]);
+  });
+
+  it("skips avatars flagged as non-human by the hub before enabling routing", async () => {
+    const humanAlice = getAddress("0x2000000000000000000000000000000000000500");
+    const nonHuman = getAddress("0x2000000000000000000000000000000000000501");
+
+    registerHumanPages = [[humanAlice, nonHuman]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    circlesRpc.humanityOverrides.set(nonHuman.toLowerCase(), false);
+
+    const routerService = new FakeRouterService(["0xtx_human"]);
+
+    const deps = makeDeps({
+      circlesRpc,
+      routerService
+    });
+
+    const cfg = makeConfig({
+      dryRun: false,
+      enableBatchSize: 2
+    });
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.pendingEnableCount).toBe(1);
+    expect(outcome.executedEnableCount).toBe(1);
+    expect(outcome.txHashes).toEqual(["0xtx_human"]);
+
+    expect(routerService.calls).toEqual([
+      {baseGroup: DEFAULT_BASE_GROUP_ADDRESS.toLowerCase(), crcAddresses: [humanAlice.toLowerCase()]}
+    ]);
   });
 
   it("enables routing per base group assignments and falls back to the configured Circles backer group", async () => {
@@ -198,6 +233,44 @@ describe("router-tms runOnce", () => {
       {baseGroup: baseGroupA.toLowerCase(), crcAddresses: [humanAlice.toLowerCase()]},
       {baseGroup: baseGroupB.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]},
       {baseGroup: circlesBackerGroup.toLowerCase(), crcAddresses: [humanCarol.toLowerCase()]}
+    ]);
+  });
+
+  it("enables base group members that are missing from RegisterHuman before defaulting remaining humans", async () => {
+    const baseGroup = getAddress("0xA0000000000000000000000000000000000000AA");
+    const baseGroupMember = getAddress("0x2000000000000000000000000000000000000300");
+    const humanBob = getAddress("0x2000000000000000000000000000000000000301");
+
+    registerHumanPages = [[humanBob]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    circlesRpc.baseGroups = [baseGroup];
+    circlesRpc.trusteesByTruster[baseGroup.toLowerCase()] = [baseGroupMember];
+    circlesRpc.trusteesByTruster[ROUTER_ADDRESS.toLowerCase()] = [];
+
+    const routerService = new FakeRouterService(["0xtx_group", "0xtx_fallback"]);
+
+    const deps = makeDeps({
+      circlesRpc,
+      routerService
+    });
+
+    const cfg = makeConfig({
+      dryRun: false,
+      enableBatchSize: 5
+    });
+
+    const outcome = await runOnce(deps, cfg);
+
+    expect(outcome.allowedHumanCount).toBe(1);
+    expect(outcome.blacklistedHumanCount).toBe(0);
+    expect(outcome.pendingEnableCount).toBe(2);
+    expect(outcome.executedEnableCount).toBe(2);
+    expect(outcome.txHashes).toEqual(["0xtx_group", "0xtx_fallback"]);
+
+    expect(routerService.calls).toEqual([
+      {baseGroup: baseGroup.toLowerCase(), crcAddresses: [baseGroupMember.toLowerCase()]},
+      {baseGroup: DEFAULT_BASE_GROUP_ADDRESS.toLowerCase(), crcAddresses: [humanBob.toLowerCase()]}
     ]);
   });
 

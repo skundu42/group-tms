@@ -1,19 +1,19 @@
-import {Contract, getAddress, JsonRpcProvider, Wallet} from "ethers";
+import {getAddress, Interface} from "ethers";
 import {IRouterService} from "../interfaces/IRouterService";
+import {SafeTransactionExecutor} from "./safeTransactionExecutor";
 
 const ROUTER_ABI = [
   "function enableCRCForRouting(address baseGroup, address[] crcArray)"
 ];
+const ROUTER_INTERFACE = new Interface(ROUTER_ABI);
 
 export class RouterService implements IRouterService {
-  private readonly provider: JsonRpcProvider;
-  private readonly wallet: Wallet;
-  private readonly contract: Contract;
+  private readonly executor: SafeTransactionExecutor;
+  private readonly routerAddress: string;
 
-  constructor(rpcUrl: string, routerAddress: string, servicePrivateKey: string) {
-    this.provider = new JsonRpcProvider(rpcUrl);
-    this.wallet = new Wallet(servicePrivateKey, this.provider);
-    this.contract = new Contract(getAddress(routerAddress), ROUTER_ABI, this.wallet);
+  constructor(rpcUrl: string, routerAddress: string, signerPrivateKey: string, safeAddress: string) {
+    this.routerAddress = getAddress(routerAddress);
+    this.executor = new SafeTransactionExecutor(rpcUrl, signerPrivateKey, safeAddress);
   }
 
   async enableCRCForRouting(baseGroup: string, crcAddresses: string[]): Promise<string> {
@@ -24,14 +24,11 @@ export class RouterService implements IRouterService {
     const normalizedBaseGroup = getAddress(baseGroup);
     const normalizedCrcs = crcAddresses.map((address) => getAddress(address));
 
-    const tx = await this.contract.enableCRCForRouting(normalizedBaseGroup, normalizedCrcs);
-    const receipt = await tx.wait();
+    const data = ROUTER_INTERFACE.encodeFunctionData("enableCRCForRouting", [
+      normalizedBaseGroup,
+      normalizedCrcs
+    ]);
 
-    if (!receipt || receipt.status !== 1) {
-      throw new Error(`enableCRCForRouting failed: ${tx.hash}`);
-    }
-
-    return tx.hash;
+    return this.executor.execute(this.routerAddress, data);
   }
 }
-

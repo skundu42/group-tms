@@ -1,40 +1,39 @@
 import {ResetCowSwapOrderResult, IBackingInstanceService, CreateLBPResult} from "../interfaces/IBackingInstanceService";
-import {Contract, JsonRpcProvider, Wallet} from "ethers";
+import {Contract, Interface, JsonRpcProvider} from "ethers";
 import CirclesBackingABI from "../abi/CirclesBackingABI.json";
+import {SafeTransactionExecutor} from "./safeTransactionExecutor";
+
+const BACKING_INTERFACE = new Interface(CirclesBackingABI);
 
 export class BackingInstanceService implements IBackingInstanceService {
-  constructor(private readonly rpcUrl: string, private readonly privateKey: string) {
+  private readonly provider: JsonRpcProvider;
+  private readonly executor?: SafeTransactionExecutor;
+
+  constructor(rpcUrl: string, signerPrivateKey?: string, safeAddress?: string) {
+    this.provider = new JsonRpcProvider(rpcUrl);
+    if (signerPrivateKey && signerPrivateKey.trim().length > 0 && safeAddress && safeAddress.trim().length > 0) {
+      this.executor = new SafeTransactionExecutor(rpcUrl, signerPrivateKey, safeAddress);
+    }
   }
 
   async resetCowSwapOrder(circlesBackingInstance: string): Promise<string> {
-    const provider = new JsonRpcProvider(this.rpcUrl);
-    const wallet = new Wallet(this.privateKey, provider);
-    const contract = new Contract(circlesBackingInstance, CirclesBackingABI, wallet);
-
-    const tx = await contract.resetCowswapOrder();
-    const receipt = await tx.wait();
-    if (!receipt || receipt.status !== 1) {
-      throw new Error(`resetCowswapOrder failed: ${tx.hash}`);
+    if (!this.executor) {
+      throw new Error("resetCowSwapOrder requires a configured Safe signer");
     }
-    return tx.hash;
+    const data = BACKING_INTERFACE.encodeFunctionData("resetCowswapOrder", []);
+    return this.executor.execute(circlesBackingInstance, data);
   }
 
   async createLbp(circlesBackingInstance: string): Promise<string> {
-    const provider = new JsonRpcProvider(this.rpcUrl);
-    const wallet = new Wallet(this.privateKey, provider);
-    const contract = new Contract(circlesBackingInstance, CirclesBackingABI, wallet);
-
-    const tx = await contract.createLBP();
-    const receipt = await tx.wait();
-    if (!receipt || receipt.status !== 1) {
-      throw new Error(`createLBP failed: ${tx.hash}`);
+    if (!this.executor) {
+      throw new Error("createLbp requires a configured Safe signer");
     }
-    return tx.hash;
+    const data = BACKING_INTERFACE.encodeFunctionData("createLBP", []);
+    return this.executor.execute(circlesBackingInstance, data);
   }
 
   async simulateCreateLbp(circlesBackingInstance: string): Promise<CreateLBPResult> {
-    const provider = new JsonRpcProvider(this.rpcUrl);
-    const contract = new Contract(circlesBackingInstance, CirclesBackingABI, provider);
+    const contract = new Contract(circlesBackingInstance, CirclesBackingABI, this.provider);
 
     // 1) Simulate first to classify errors
     try {
@@ -57,8 +56,7 @@ export class BackingInstanceService implements IBackingInstanceService {
   }
 
   async simulateResetCowSwapOrder(circlesBackingInstance: string): Promise<ResetCowSwapOrderResult> {
-    const provider = new JsonRpcProvider(this.rpcUrl);
-    const contract = new Contract(circlesBackingInstance, CirclesBackingABI, provider);
+    const contract = new Contract(circlesBackingInstance, CirclesBackingABI, this.provider);
 
     // 1) Simulate to get a clean error classification without spending gas.
     try {
