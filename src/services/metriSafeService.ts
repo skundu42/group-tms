@@ -61,6 +61,25 @@ export class MetriSafeService implements IAvatarSafeService {
       result.delete(conflictedAvatar);
     }
 
+    const avatarsBySafe = new Map<string, string[]>();
+    for (const [avatar, safe] of result.entries()) {
+      const existing = avatarsBySafe.get(safe);
+      if (existing) {
+        existing.push(avatar);
+      } else {
+        avatarsBySafe.set(safe, [avatar]);
+      }
+    }
+
+    for (const avatarsForSafe of avatarsBySafe.values()) {
+      if (avatarsForSafe.length < 2) {
+        continue;
+      }
+      for (const avatar of avatarsForSafe) {
+        result.delete(avatar);
+      }
+    }
+
     return result;
   }
 
