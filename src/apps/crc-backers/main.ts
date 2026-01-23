@@ -48,7 +48,7 @@ let nextFromBlock = deployedAtBlock;
 
 process.on('SIGTERM', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **Backers Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -57,7 +57,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **Backers Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -65,7 +65,7 @@ process.on('SIGINT', async () => {
 });
 
 async function sendStartupNotification(): Promise<void> {
-  const startupMessage = `✅ **Circles Group TMS Service Started**\n\n` +
+  const startupMessage = `✅ **Backers Group TMS Service Started**\n\n` +
     `Service is now running and monitoring for new backers.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Group: ${backersGroupAddress}\n` +
@@ -135,7 +135,7 @@ async function loop() {
         
         // Send Slack notification before crashing
         try {
-          const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+          const crashMessage = `🚨 **Backers Group TMS Service is CRASHING**\n\n` +
             `Error threshold reached (${errorIndex}/${errorsBeforeCrash}).\n` +
             `Last error: ${baseError.message}\n\n` +
             `Service will exit with code 1. Please investigate and restart.`;
@@ -179,7 +179,7 @@ main().catch(async (err) => {
   rootLogger.error(formatErrorWithCauses(asError));
 
   try {
-    const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+    const crashMessage = `🚨 **Backers Group TMS Service is CRASHING**\n\n` +
       `Fatal error in main(): ${asError.message}\n\n` +
       `Service will exit with code 1. Please investigate and restart.`;
     await slackService.notifySlackStartOrCrash(crashMessage);
