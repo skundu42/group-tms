@@ -29,7 +29,6 @@ function makeConfig(overrides?: Partial<RunConfig>): RunConfig {
     startAtBlock: 0,
     confirmationBlocks: 0,
     blockChunkSize: 50_000,
-    blacklistChunkSize: 100,
     groupAddress: "0x1000000000000000000000000000000000000000",
     ...overrides
   };
@@ -141,7 +140,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -203,7 +201,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     circlesRpc.trusteesByTruster[cfg.groupAddress.toLowerCase()] = [alreadyTrustedInput];
@@ -257,7 +254,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -333,7 +329,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10,
       dryRun: true
     });
 
@@ -378,7 +373,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10,
       dryRun: true,
       groupBatchSize: 1
     });
@@ -419,7 +413,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -463,7 +456,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 40,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn()
@@ -511,7 +503,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -549,7 +540,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -584,7 +574,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     const fetchMock = jest.fn().mockResolvedValue({
@@ -626,7 +615,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     circlesRpc.trusteesByTruster[cfg.groupAddress.toLowerCase()] = [avatarInput];
@@ -667,7 +655,6 @@ describe("gp-crc runOnce", () => {
       startAtBlock: 140,
       confirmationBlocks: 5,
       blockChunkSize: 10,
-      blacklistChunkSize: 10
     });
 
     circlesRpc.trusteesByTruster[cfg.groupAddress.toLowerCase()] = [avatarInput];

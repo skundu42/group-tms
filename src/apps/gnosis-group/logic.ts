@@ -33,7 +33,6 @@ export type RunConfig = {
   autoTrustGroupAddresses?: string[];
   backersGroupAddress?: string;
   fetchPageSize?: number;
-  blacklistChunkSize?: number;
   scoreBatchSize?: number;
   scoreThreshold?: number;
   groupBatchSize?: number;
@@ -71,7 +70,6 @@ export type RunOutcome = {
 };
 
 export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
-export const DEFAULT_BLACKLIST_CHUNK_SIZE = 500;
 export const DEFAULT_SCORE_BATCH_SIZE = 20;
 export const DEFAULT_SCORE_THRESHOLD = 100;
 export const DEFAULT_GROUP_BATCH_SIZE = 10;
@@ -95,7 +93,6 @@ const GROUP_BATCH_RETRY_DELAY_MS = 2_000;
 export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   const {blacklistingService, circlesRpc, groupService, logger} = deps;
   const fetchPageSize = Math.max(1, cfg.fetchPageSize ?? DEFAULT_FETCH_PAGE_SIZE);
-  const blacklistChunkSize = Math.max(1, cfg.blacklistChunkSize ?? DEFAULT_BLACKLIST_CHUNK_SIZE);
   const scoreBatchSize = Math.max(1, cfg.scoreBatchSize ?? DEFAULT_SCORE_BATCH_SIZE);
   const scoreThreshold = resolveScoreThreshold(cfg.scoreThreshold, logger);
   const groupBatchSize = Math.max(1, cfg.groupBatchSize ?? DEFAULT_GROUP_BATCH_SIZE);
@@ -170,18 +167,11 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     loggerBlacklist.info(
       `Dry-run mode enabled; evaluating blacklist for ${addressesForBlacklistEvaluation.length} unique address(es).`
     );
-    if (addressesForBlacklistEvaluation.length > 0) {
-      const batches = chunkArray(addressesForBlacklistEvaluation, blacklistChunkSize);
-      loggerBlacklist.debug(
-        `Dry-run: evaluating blacklist in ${batches.length} batch(es) of up to ${blacklistChunkSize} address(es).`
-      );
-    }
   }
 
   const {blacklisted: blacklistedAddresses} = await partitionBlacklistedAddresses(
     blacklistingService,
     addressesForBlacklistEvaluation,
-    blacklistChunkSize,
     loggerBlacklist
   );
   const blacklistedLowercase = new Set(blacklistedAddresses.map((address) => address.toLowerCase()));
@@ -706,34 +696,30 @@ async function fetchAllHumanAvatars(
 async function partitionBlacklistedAddresses(
   service: IBlacklistingService,
   addresses: string[],
-  chunkSize: number,
   logger: ILoggerService
 ): Promise<{allowed: string[]; blacklisted: string[]}> {
   const allowed: string[] = [];
   const blacklisted: string[] = [];
 
-  for (let i = 0; i < addresses.length; i += chunkSize) {
-    const chunk = addresses.slice(i, i + chunkSize);
-    const verdicts = await fetchBlacklistVerdictsWithRetry(service, chunk, logger);
-    const verdictMap = new Map<string, IBlacklistServiceVerdict>();
+  const verdicts = await fetchBlacklistVerdictsWithRetry(service, addresses, logger);
+  const verdictMap = new Map<string, IBlacklistServiceVerdict>();
 
-    for (const verdict of verdicts) {
-      verdictMap.set(verdict.address.toLowerCase(), verdict);
+  for (const verdict of verdicts) {
+    verdictMap.set(verdict.address.toLowerCase(), verdict);
+  }
+
+  for (const address of addresses) {
+    const verdict = verdictMap.get(address.toLowerCase());
+    if (!verdict) {
+      logger.warn(`No blacklist verdict returned for ${address}; treating as allowed.`);
+      allowed.push(address);
+      continue;
     }
 
-    for (const address of chunk) {
-      const verdict = verdictMap.get(address.toLowerCase());
-      if (!verdict) {
-        logger.warn(`No blacklist verdict returned for ${address}; treating as allowed.`);
-        allowed.push(address);
-        continue;
-      }
-
-      if (isBlacklisted(verdict)) {
-        blacklisted.push(address);
-      } else {
-        allowed.push(address);
-      }
+    if (isBlacklisted(verdict)) {
+      blacklisted.push(address);
+    } else {
+      allowed.push(address);
     }
   }
 

@@ -8,7 +8,6 @@ import {
   runOnce,
   RunConfig,
   DEFAULT_FETCH_PAGE_SIZE,
-  DEFAULT_BLACKLIST_CHUNK_SIZE,
   DEFAULT_SCORE_BATCH_SIZE,
   DEFAULT_SCORE_THRESHOLD,
   DEFAULT_GROUP_BATCH_SIZE,
@@ -22,7 +21,7 @@ const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
-const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "0xC19BC204eb1c1D5B3FE500E5E5dfaBaB625F286c";
 const backersGroupAddress = process.env.GNOSIS_GROUP_BACKERS_GROUP_ADDRESS || DEFAULT_BACKERS_GROUP_ADDRESS;
@@ -38,7 +37,6 @@ if (!targetGroupAddress) {
 }
 
 const fetchPageSize = parseEnvInt("GNOSIS_GROUP_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
-const blacklistChunkSize = parseEnvInt("GNOSIS_GROUP_BLACKLIST_CHUNK_SIZE", DEFAULT_BLACKLIST_CHUNK_SIZE);
 const scoreBatchSize = parseEnvInt("GNOSIS_GROUP_SCORE_BATCH_SIZE", DEFAULT_SCORE_BATCH_SIZE);
 const scoreThreshold = parseEnvNumber("GNOSIS_GROUP_SCORE_THRESHOLD", DEFAULT_SCORE_THRESHOLD);
 const groupBatchSize = parseEnvInt("GNOSIS_GROUP_BATCH_SIZE", DEFAULT_GROUP_BATCH_SIZE);
@@ -69,7 +67,6 @@ const config: RunConfig = {
   targetGroupAddress,
   backersGroupAddress,
   fetchPageSize,
-  blacklistChunkSize,
   scoreBatchSize,
   scoreThreshold,
   groupBatchSize,
@@ -82,7 +79,6 @@ rootLogger.info(`  - scoringServiceUrl=${scoringServiceUrl}`);
 rootLogger.info(`  - targetGroupAddress=${targetGroupAddress}`);
 rootLogger.info(`  - backersGroupAddress=${backersGroupAddress}`);
 rootLogger.info(`  - fetchPageSize=${fetchPageSize}`);
-rootLogger.info(`  - blacklistChunkSize=${blacklistChunkSize}`);
 rootLogger.info(`  - scoreBatchSize=${scoreBatchSize}`);
 rootLogger.info(`  - scoreThreshold=${scoreThreshold}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
@@ -190,7 +186,24 @@ function parseEnvNumber(name: string, fallback: number): number {
   return parsed;
 }
 
-mainLoop().catch((cause) => {
+async function initializeBlacklist(): Promise<void> {
+  try {
+    rootLogger.info("Loading blacklist from remote service...");
+    await blacklistingService.loadBlacklist();
+    const count = blacklistingService.getBlacklistCount();
+    rootLogger.info(`Blacklist loaded successfully. ${count} addresses blacklisted.`);
+  } catch (error) {
+    rootLogger.error("Failed to load blacklist:", error);
+    throw error;
+  }
+}
+
+async function start(): Promise<void> {
+  await initializeBlacklist();
+  await mainLoop();
+}
+
+start().catch((cause) => {
   const error = cause instanceof Error ? cause : new Error(String(cause));
   rootLogger.error("gnosis-group run encountered an unrecoverable error:");
   rootLogger.error(formatErrorWithCauses(error));

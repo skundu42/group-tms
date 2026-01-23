@@ -112,7 +112,17 @@ export class FakeChainRpc implements IChainRpc {
 }
 
 export class FakeBlacklist implements IBlacklistingService {
+  private loaded: boolean = false;
+
   constructor(private readonly blocked: Set<string> = new Set(), private readonly flagged: Set<string> = new Set()) {
+  }
+
+  async loadBlacklist(): Promise<void> {
+    this.loaded = true;
+  }
+
+  getBlacklistCount(): number {
+    return this.blocked.size + this.flagged.size;
   }
 
   async checkBlacklist(addresses: string[]): Promise<IBlacklistServiceVerdict[]> {
