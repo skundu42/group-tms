@@ -11,7 +11,6 @@ export type RunConfig = {
   startAtBlock: number;
   confirmationBlocks: number;
   blockChunkSize?: number;
-  blacklistChunkSize?: number;
   groupAddress: string;
   dryRun?: boolean;
   groupBatchSize?: number;
@@ -62,7 +61,6 @@ type BlockRange = {
 };
 
 export const DEFAULT_BLOCK_CHUNK_SIZE = 50_0000;
-export const DEFAULT_BLACKLIST_CHUNK_SIZE = 1000;
 export const DEFAULT_GROUP_BATCH_SIZE = 10;
 
 const EVENT_FETCH_TIMEOUT_MS = 30_000;
@@ -83,7 +81,6 @@ export async function runOnce(
 ): Promise<RunOutcome> {
   const {chainRpc, blacklistingService, avatarSafeService, circlesRpc, groupService, logger} = deps;
   const blockChunkSize = Math.max(1, cfg.blockChunkSize ?? DEFAULT_BLOCK_CHUNK_SIZE);
-  const blacklistChunkSize = Math.max(1, cfg.blacklistChunkSize ?? DEFAULT_BLACKLIST_CHUNK_SIZE);
   const groupBatchSize = Math.max(1, cfg.groupBatchSize ?? DEFAULT_GROUP_BATCH_SIZE);
   const dryRun = !!cfg.dryRun;
   const groupAddress = normalizeAddress(cfg.groupAddress);
@@ -178,7 +175,6 @@ export async function runOnce(
   const {allowed: allowedCandidates, blacklisted: blacklistedCandidates} = await partitionBlacklistedAddresses(
     blacklistingService,
     evaluationCandidates,
-    blacklistChunkSize,
     logger
   );
 
@@ -563,34 +559,30 @@ function chunkArray<T>(values: T[], chunkSize: number): T[][] {
 async function partitionBlacklistedAddresses(
   service: IBlacklistingService,
   addresses: string[],
-  chunkSize: number,
   logger: ILoggerService
 ): Promise<{allowed: string[]; blacklisted: string[]}> {
   const allowed: string[] = [];
   const blacklisted: string[] = [];
 
-  for (let i = 0; i < addresses.length; i += chunkSize) {
-    const chunk = addresses.slice(i, i + chunkSize);
-    const verdicts = await fetchBlacklistVerdictsWithRetry(service, chunk, logger);
-    const verdictMap = new Map<string, IBlacklistServiceVerdict>();
+  const verdicts = await fetchBlacklistVerdictsWithRetry(service, addresses, logger);
+  const verdictMap = new Map<string, IBlacklistServiceVerdict>();
 
-    for (const verdict of verdicts) {
-      verdictMap.set(verdict.address.toLowerCase(), verdict);
+  for (const verdict of verdicts) {
+    verdictMap.set(verdict.address.toLowerCase(), verdict);
+  }
+
+  for (const address of addresses) {
+    const verdict = verdictMap.get(address.toLowerCase());
+    if (!verdict) {
+      logger.warn(`No verdict returned for ${address}; treating as allowed.`);
+      allowed.push(address);
+      continue;
     }
 
-    for (const address of chunk) {
-      const verdict = verdictMap.get(address.toLowerCase());
-      if (!verdict) {
-        logger.warn(`No verdict returned for ${address}; treating as allowed.`);
-        allowed.push(address);
-        continue;
-      }
-
-      if (isBlacklisted(verdict)) {
-        blacklisted.push(address);
-      } else {
-        allowed.push(address);
-      }
+    if (isBlacklisted(verdict)) {
+      blacklisted.push(address);
+    } else {
+      allowed.push(address);
     }
   }
 

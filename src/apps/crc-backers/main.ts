@@ -9,7 +9,7 @@ import {runOnce} from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
-const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
 const backersGroupAddress = process.env.BACKERS_GROUP_ADDRESS || "0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026";
 const backingFactoryAddress = process.env.BACKING_FACTORY_ADDRESS || "0xeced91232c609a42f6016860e8223b8aecaa7bd0";
 const deployedAtBlock = Number.parseInt(process.env.START_AT_BLOCK || "39743285");
@@ -48,7 +48,7 @@ let nextFromBlock = deployedAtBlock;
 
 process.on('SIGTERM', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **Backers Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -57,7 +57,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 **Backers Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -65,7 +65,7 @@ process.on('SIGINT', async () => {
 });
 
 async function sendStartupNotification(): Promise<void> {
-  const startupMessage = `✅ **Circles Group TMS Service Started**\n\n` +
+  const startupMessage = `✅ **Backers Group TMS Service Started**\n\n` +
     `Service is now running and monitoring for new backers.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Group: ${backersGroupAddress}\n` +
@@ -135,7 +135,7 @@ async function loop() {
         
         // Send Slack notification before crashing
         try {
-          const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+          const crashMessage = `🚨 **Backers Group TMS Service is CRASHING**\n\n` +
             `Error threshold reached (${errorIndex}/${errorsBeforeCrash}).\n` +
             `Last error: ${baseError.message}\n\n` +
             `Service will exit with code 1. Please investigate and restart.`;
@@ -155,7 +155,20 @@ async function loop() {
   }
 }
 
+async function initializeBlacklist(): Promise<void> {
+  try {
+    rootLogger.info("Loading blacklist from remote service...");
+    await blacklistingService.loadBlacklist();
+    const count = blacklistingService.getBlacklistCount();
+    rootLogger.info(`Blacklist loaded successfully. ${count} addresses blacklisted.`);
+  } catch (error) {
+    rootLogger.error("Failed to load blacklist:", error);
+    throw error;
+  }
+}
+
 async function main() {
+  await initializeBlacklist();
   await sendStartupNotification();
   await loop();
 }
@@ -166,7 +179,7 @@ main().catch(async (err) => {
   rootLogger.error(formatErrorWithCauses(asError));
 
   try {
-    const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+    const crashMessage = `🚨 **Backers Group TMS Service is CRASHING**\n\n` +
       `Fatal error in main(): ${asError.message}\n\n` +
       `Service will exit with code 1. Please investigate and restart.`;
     await slackService.notifySlackStartOrCrash(crashMessage);

@@ -10,7 +10,6 @@ import {
   runOnce,
   RunConfig,
   DEFAULT_BLOCK_CHUNK_SIZE,
-  DEFAULT_BLACKLIST_CHUNK_SIZE,
   DEFAULT_GROUP_BATCH_SIZE
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
@@ -19,7 +18,7 @@ const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gp-crc");
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
-const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const groupAddress = process.env.GP_CRC_GROUP_ADDRESS || "0xb629a1e86f3efada0f87c83494da8cc34c3f84ef";
 const safeAddress = process.env.GP_CRC_SAFE_ADDRESS || "";
@@ -31,7 +30,6 @@ const metriSafeApiKey = process.env.METRI_SAFE_API_KEY || "";
 const startAtBlock = parseEnvInt("START_AT_BLOCK", 31734312);
 const confirmationBlocks = 10;
 const blockChunkSize = DEFAULT_BLOCK_CHUNK_SIZE;
-const blacklistChunkSize = DEFAULT_BLACKLIST_CHUNK_SIZE;
 const pollIntervalMs = 10 * 60 * 1_000;
 const groupBatchSize = DEFAULT_GROUP_BATCH_SIZE;
 
@@ -72,7 +70,6 @@ const config: RunConfig = {
   startAtBlock,
   confirmationBlocks,
   blockChunkSize,
-  blacklistChunkSize,
   groupAddress,
   dryRun,
   groupBatchSize
@@ -155,7 +152,24 @@ function parseEnvInt(name: string, fallback: number): number {
   return value;
 }
 
-mainLoop().catch((cause) => {
+async function initializeBlacklist(): Promise<void> {
+  try {
+    rootLogger.info("Loading blacklist from remote service...");
+    await blacklistingService.loadBlacklist();
+    const count = blacklistingService.getBlacklistCount();
+    rootLogger.info(`Blacklist loaded successfully. ${count} addresses blacklisted.`);
+  } catch (error) {
+    rootLogger.error("Failed to load blacklist:", error);
+    throw error;
+  }
+}
+
+async function start(): Promise<void> {
+  await initializeBlacklist();
+  await mainLoop();
+}
+
+start().catch((cause) => {
   const error = cause instanceof Error ? cause : new Error(String(cause));
   rootLogger.error("GP-CRC TMS Service encountered an unrecoverable error:");
   rootLogger.error(formatErrorWithCauses(error));

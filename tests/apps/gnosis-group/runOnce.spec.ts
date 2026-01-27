@@ -133,7 +133,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: true,
       scoreThreshold: 50,
       scoreBatchSize: 10,
-      blacklistChunkSize: 10,
       groupBatchSize: 10
     };
 
@@ -197,7 +196,6 @@ describe("gnosis-group runOnce", () => {
       backersGroupAddress: circlesBackerGroup,
       dryRun: true,
       scoreBatchSize: 5,
-      blacklistChunkSize: 5,
       groupBatchSize: 5
     };
 
@@ -263,7 +261,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: true,
       scoreThreshold: 10,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 10
     };
 
@@ -323,7 +320,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: false,
       scoreThreshold: 10,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 10
     };
 
@@ -387,7 +383,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: false,
       scoreThreshold: 10,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 1
     };
 
@@ -454,7 +449,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: false,
       scoreThreshold: 10,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 1
     };
 
@@ -522,7 +516,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 10
     };
 
@@ -575,7 +568,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: true,
       scoreThreshold: 50,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 1
     };
 
@@ -628,7 +620,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 1
     };
 
@@ -763,7 +754,6 @@ describe("gnosis-group runOnce", () => {
       dryRun: false,
       scoreThreshold: 50,
       scoreBatchSize: 10,
-      blacklistChunkSize: 5,
       groupBatchSize: 10
     };
 
