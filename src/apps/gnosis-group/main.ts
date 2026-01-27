@@ -7,12 +7,14 @@ import {SlackService} from "../../services/slackService";
 import {
   runOnce,
   RunConfig,
+  ScoreCache,
   DEFAULT_FETCH_PAGE_SIZE,
   DEFAULT_SCORE_BATCH_SIZE,
   DEFAULT_SCORE_THRESHOLD,
   DEFAULT_GROUP_BATCH_SIZE,
   DEFAULT_BACKERS_GROUP_ADDRESS,
   DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
+  DEFAULT_SCORE_CACHE_TTL_MS,
   RunOutcome
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
@@ -40,11 +42,13 @@ const fetchPageSize = parseEnvInt("GNOSIS_GROUP_FETCH_PAGE_SIZE", DEFAULT_FETCH_
 const scoreBatchSize = parseEnvInt("GNOSIS_GROUP_SCORE_BATCH_SIZE", DEFAULT_SCORE_BATCH_SIZE);
 const scoreThreshold = parseEnvNumber("GNOSIS_GROUP_SCORE_THRESHOLD", DEFAULT_SCORE_THRESHOLD);
 const groupBatchSize = parseEnvInt("GNOSIS_GROUP_BATCH_SIZE", DEFAULT_GROUP_BATCH_SIZE);
+const scoreCacheTtlMs = parseEnvInt("GNOSIS_GROUP_SCORE_CACHE_TTL_MINUTES", DEFAULT_SCORE_CACHE_TTL_MS / 60_000) * 60_000;
 
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
+const scoreCache = new ScoreCache();
 
 const runLogger = rootLogger.child("run");
 let groupService: IGroupService | undefined;
@@ -70,6 +74,7 @@ const config: RunConfig = {
   scoreBatchSize,
   scoreThreshold,
   groupBatchSize,
+  scoreCacheTtlMs,
   dryRun
 };
 
@@ -87,6 +92,7 @@ rootLogger.info(`  - safeAddress=${safeAddress || "(not set)"}`);
 rootLogger.info(`  - safeSignerPrivateKeyConfigured=${safeSignerPrivateKey.trim().length > 0}`);
 rootLogger.info(`  - dryRun=${dryRun}`);
 rootLogger.info(`  - runIntervalMinutes=${runIntervalMinutes}`);
+rootLogger.info(`  - scoreCacheTtlMinutes=${scoreCacheTtlMs / 60_000}`);
 rootLogger.info(`  - slackConfigured=${slackConfigured}`);
 
 void notifySlackStartup();
@@ -123,7 +129,8 @@ async function mainLoop(): Promise<void> {
           blacklistingService,
           circlesRpc,
           groupService,
-          logger: runLogger
+          logger: runLogger,
+          scoreCache
         },
         config
       );

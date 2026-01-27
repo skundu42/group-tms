@@ -36,6 +36,7 @@ export type RunConfig = {
   scoreBatchSize?: number;
   scoreThreshold?: number;
   groupBatchSize?: number;
+  scoreCacheTtlMs?: number;
   dryRun?: boolean;
 };
 
@@ -44,6 +45,7 @@ export type Deps = {
   circlesRpc: ICirclesRpc;
   logger: ILoggerService;
   groupService?: IGroupService;
+  scoreCache?: ScoreCache;
 };
 
 export type RunOutcome = {
@@ -68,6 +70,31 @@ export type RunOutcome = {
   untrustBatches: string[][];
   untrustTxHashes: string[];
 };
+
+export const DEFAULT_SCORE_CACHE_TTL_MS = 4 * 60 * 60 * 1_000; // 4 hours
+
+export class ScoreCache {
+  private entries = new Map<string, { score: number; fetchedAt: number }>();
+
+  get(address: string): { score: number; fetchedAt: number } | undefined {
+    return this.entries.get(address.toLowerCase());
+  }
+
+  set(address: string, score: number): void {
+    this.entries.set(address.toLowerCase(), { score, fetchedAt: Date.now() });
+  }
+
+  getValidScore(address: string, ttlMs: number): number | undefined {
+    const entry = this.entries.get(address.toLowerCase());
+    if (!entry) return undefined;
+    if (Date.now() - entry.fetchedAt > ttlMs) return undefined;
+    return entry.score;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+}
 
 export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
 export const DEFAULT_SCORE_BATCH_SIZE = 20;
@@ -238,13 +265,39 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   let totalScored = 0;
 
   if (allowedAvatars.length > 0) {
-    const scoreBatches = chunkArray(allowedAvatars, scoreBatchSize);
+    const scoreCache = deps.scoreCache;
+    const cacheTtlMs = cfg.scoreCacheTtlMs ?? DEFAULT_SCORE_CACHE_TTL_MS;
+
+    const cachedAvatars: string[] = [];
+    const uncachedAvatars: string[] = [];
+
+    for (const avatar of allowedAvatars) {
+      const cachedScore = scoreCache?.getValidScore(avatar, cacheTtlMs);
+      if (cachedScore !== undefined) {
+        cachedAvatars.push(avatar);
+        const normalized = normalizeAddress(avatar);
+        if (normalized) {
+          scores[normalized] = cachedScore;
+          totalScored += 1;
+        }
+      } else {
+        uncachedAvatars.push(avatar);
+      }
+    }
+
+    if (scoreCache) {
+      loggerScores.info(
+        `Score cache: ${cachedAvatars.length} avatar(s) served from cache, ${uncachedAvatars.length} avatar(s) need fresh scoring.`
+      );
+    }
+
+    const scoreBatches = chunkArray(uncachedAvatars, scoreBatchSize);
     if (dryRun) {
-      if (scoreBatches.length === 0) {
+      if (scoreBatches.length === 0 && uncachedAvatars.length === 0 && cachedAvatars.length === 0) {
         loggerScores.info("Dry-run mode enabled; no avatars to score.");
       } else {
         loggerScores.info(
-          `Dry-run mode enabled; requesting ${scoreBatches.length} relative trust score batch request(s) for ${allowedAvatars.length} avatar(s).`
+          `Dry-run mode enabled; requesting ${scoreBatches.length} relative trust score batch request(s) for ${uncachedAvatars.length} avatar(s).`
         );
       }
     }
@@ -269,6 +322,7 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
           totalScored += 1;
         }
         scores[address] = score;
+        scoreCache?.set(address, score);
       }
     }
 
