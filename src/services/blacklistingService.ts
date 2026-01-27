@@ -38,7 +38,10 @@ export class BlacklistingService implements IBlacklistingService {
 
             const response = await fetch(url.toString(), {
                 method: "GET",
-                signal: controller.signal
+                signal: controller.signal,
+                headers: {
+                    "User-Agent": "group-tms/1.0"
+                }
             });
 
             if (!response.ok) {
