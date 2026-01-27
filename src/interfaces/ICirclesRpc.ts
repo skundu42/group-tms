@@ -26,4 +26,17 @@ export interface ICirclesRpc {
    * @returns A promise that resolves to an array of trustee addresses.
    */
   fetchAllTrustees(truster: string): Promise<string[]>;
+
+  /**
+   * Fetches all base groups using direct RPC call.
+   * @param pageSize Optional page size used for pagination when querying the RPC.
+   * @returns A promise that resolves to an array of base group addresses.
+   */
+  fetchAllBaseGroups(pageSize?: number): Promise<string[]>;
+
+  /**
+   * Returns true when the provided address is a human avatar according to the Circles hub.
+   * @param address The address to check.
+   */
+  isHuman(address: string): Promise<boolean>;
 }

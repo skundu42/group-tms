@@ -1,28 +1,24 @@
 import {GroupOwnerAndServiceAddress, IGroupService} from "../interfaces/IGroupService";
 import {Contract, getAddress, JsonRpcProvider, Wallet} from "ethers";
 
-const GROUP_MINI_ABI = [
+export const GROUP_MINI_ABI = [
   "function owner() view returns (address)",
   "function service() view returns (address)",
   "function trustBatchWithConditions(address[] memory _members, uint96 _expiry)"
 ];
 
 export class GroupService implements IGroupService {
+  private readonly provider: JsonRpcProvider;
+  private readonly wallet: Wallet;
+
   constructor(private readonly rpcUrl: string, private readonly servicePrivateKey: string) {
+    this.provider = new JsonRpcProvider(rpcUrl);
+    this.wallet = new Wallet(servicePrivateKey, this.provider);
   }
 
-  /**
-   * Calls the `trustBatchWithConditions` function of the group contract and returns the transaction hash.
-   * @param groupAddress
-   * @param trusteeAddresses
-   * @returns The transaction hash of the trustBatchWithConditions call.
-   */
   async trustBatchWithConditions(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
-    const provider = new JsonRpcProvider(this.rpcUrl);
-    const wallet = new Wallet(this.servicePrivateKey, provider);
-    const group = new Contract(groupAddress, GROUP_MINI_ABI, wallet);
+    const group = this.getWritableGroupContract(groupAddress);
 
-    // uint96 max
     const expiry: bigint = (1n << 96n) - 1n;
 
     const tx = await group.trustBatchWithConditions(trusteeAddresses, expiry);
@@ -35,9 +31,22 @@ export class GroupService implements IGroupService {
     return tx.hash;
   }
 
+  async untrustBatch(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
+
+    const group = this.getWritableGroupContract(groupAddress);
+
+    const tx = await group.trustBatchWithConditions(trusteeAddresses, 0n);
+    const receipt = await tx.wait();
+
+    if (!receipt || receipt.status !== 1) {
+      throw new Error(`untrustBatch failed: ${tx.hash}`);
+    }
+
+    return tx.hash;
+  }
+
   async fetchGroupOwnerAndService(groupAddress: string): Promise<GroupOwnerAndServiceAddress> {
-    const provider = new JsonRpcProvider(this.rpcUrl);
-    const group = new Contract(groupAddress, GROUP_MINI_ABI, provider);
+    const group = new Contract(groupAddress, GROUP_MINI_ABI, this.provider);
 
     const owner = String(await group.owner());
     const service = String(await group.service());
@@ -49,5 +58,9 @@ export class GroupService implements IGroupService {
       owner: ownerC,
       service: serviceC
     };
+  }
+
+  private getWritableGroupContract(groupAddress: string): Contract {
+    return new Contract(groupAddress, GROUP_MINI_ABI, this.wallet);
   }
 }

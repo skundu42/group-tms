@@ -8,19 +8,26 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
+    "start:crc-backers": "node --env-file=.env dist/src/apps/crc-backers/main.js",
+    "start:gp-crc": "node --env-file=.env dist/src/apps/gp-crc/main.js",
+    "start:gnosis-group": "node --env-file=.env dist/src/apps/gnosis-group/main.js",
+    "start:oic": "node --env-file=.env dist/src/apps/oic/main.js",
+    "start:router-tms": "node --env-file=.env dist/src/apps/router-tms/main.js",
+    "start:all": "node --env-file=.env dist/src/apps/manager.js",
     "test": "jest --config jest.config.ts",
     "test:coverage": "jest --config jest.config.ts --coverage"
   },
   "dependencies": {
     "@circles-sdk/data": "^0.29.1",
+    "@safe-global/protocol-kit": "^6.1.2",
     "ethers": "^6.15.0",
     "multihashes": "^4.0.3"
   },
   "devDependencies": {
-    "@types/node": "^20.11.2",
     "@types/jest": "^29.4.1",
+    "@types/node": "^20.11.2",
+    "ts-jest": "^29.4.1",
     "ts-node": "^10.9.1",
-    "typescript": "^5.7.3",
-    "ts-jest": "^29.4.1"
+    "typescript": "^5.7.3"
   }
 }

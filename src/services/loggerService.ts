@@ -12,11 +12,12 @@ export class LoggerService implements ILoggerService {
   }
 
   private format(args: unknown[]): unknown[] {
+    const ts = new Date().toISOString();
     const havePrefix = typeof this.prefix === "string" && this.prefix.length > 0;
     if (havePrefix) {
-      return [`[${this.prefix}]`, ...args];
+      return [`[${ts}]`, `[${this.prefix}]`, ...args];
     }
-    return args;
+    return [`[${ts}]`, ...args];
   }
 
   info(...args: unknown[]): void {

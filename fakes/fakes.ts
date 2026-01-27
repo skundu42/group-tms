@@ -1,5 +1,6 @@
 import {CrcV2_CirclesBackingCompleted, CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
 import {CrcV2_Trust} from "@circles-sdk/data";
+import {getAddress} from "ethers";
 import {ICirclesRpc} from "../src/interfaces/ICirclesRpc";
 import {IChainRpc} from "../src/interfaces/IChainRpc";
 import {IBlacklistingService, IBlacklistServiceVerdict} from "../src/interfaces/IBlacklistingService";
@@ -11,6 +12,10 @@ import {
 } from "../src/interfaces/IBackingInstanceService";
 import {ISlackService} from "../src/interfaces/ISlackService";
 import {ILoggerService} from "../src/interfaces/ILoggerService";
+import {AffiliateGroupChanged, IAffiliateGroupEventsService} from "../src/interfaces/IAffiliateGroupEventsService";
+import {IAvatarSafeService} from "../src/interfaces/IAvatarSafeService";
+import {IRouterService} from "../src/interfaces/IRouterService";
+import {IRouterEnablementStore} from "../src/interfaces/IRouterEnablementStore";
 
 export class FakeLogger implements ILoggerService {
   logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
@@ -57,6 +62,8 @@ export class FakeCirclesRpc implements ICirclesRpc {
   completed: CrcV2_CirclesBackingCompleted[] = [];
   trusts: CrcV2_Trust[] = [];
   trusteesByTruster: Record<string, string[]> = {};
+  baseGroups: string[] = [];
+  humanityOverrides = new Map<string, boolean>();
 
   async fetchBackingInitiatedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingInitiated[]> {
     const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
@@ -70,6 +77,24 @@ export class FakeCirclesRpc implements ICirclesRpc {
 
   async fetchAllTrustees(truster: string): Promise<string[]> {
     return this.trusteesByTruster[truster.toLowerCase()] ?? [];
+  }
+
+  async fetchAllBaseGroups(_pageSize?: number): Promise<string[]> {
+    return this.baseGroups;
+  }
+
+  async isHuman(address: string): Promise<boolean> {
+    const normalized = address.toLowerCase();
+    const override = this.humanityOverrides.get(normalized);
+    if (override !== undefined) {
+      return override;
+    }
+
+    if (this.baseGroups.some((group) => group.toLowerCase() === normalized)) {
+      return false;
+    }
+
+    return true;
   }
 }
 
@@ -105,15 +130,66 @@ export class FakeBlacklist implements IBlacklistingService {
 }
 
 export class FakeGroupService implements IGroupService {
-  calls: { groupAddress: string; trusteeAddresses: string[] }[] = [];
+  calls: { type: "trust" | "untrust"; groupAddress: string; trusteeAddresses: string[] }[] = [];
+  trustCalls = 0;
+  untrustCalls = 0;
 
   async trustBatchWithConditions(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
-    this.calls.push({groupAddress, trusteeAddresses: [...trusteeAddresses]});
-    return `0xtrust_${this.calls.length}`;
+    this.trustCalls += 1;
+    this.calls.push({type: "trust", groupAddress, trusteeAddresses: [...trusteeAddresses]});
+    return `0xtrust_${this.trustCalls}`;
+  }
+
+  async untrustBatch(groupAddress: string, trusteeAddresses: string[]): Promise<string> {
+    this.untrustCalls += 1;
+    this.calls.push({type: "untrust", groupAddress, trusteeAddresses: [...trusteeAddresses]});
+    return `0xuntrust_${this.untrustCalls}`;
   }
 
   async fetchGroupOwnerAndService(): Promise<any> {
     throw new Error("Not under test");
+  }
+}
+
+export class FakeAvatarSafeService implements IAvatarSafeService {
+  private readonly safeByAvatar: Map<string, string> | null;
+
+  constructor(mapping: Record<string, string> | null = null) {
+    if (mapping === null) {
+      this.safeByAvatar = null;
+      return;
+    }
+
+    this.safeByAvatar = new Map<string, string>();
+    for (const [rawAvatar, safe] of Object.entries(mapping)) {
+      try {
+        const normalized = getAddress(rawAvatar);
+        this.safeByAvatar.set(normalized, safe);
+      } catch {
+        // ignore invalid addresses provided in tests
+      }
+    }
+  }
+
+  async findAvatarsWithSafes(avatars: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    for (const avatar of avatars) {
+      try {
+        const normalized = getAddress(avatar);
+        if (this.safeByAvatar === null) {
+          result.set(normalized, `0xsafe_${normalized.slice(2, 8).toLowerCase()}`);
+          continue;
+        }
+
+        const configured = this.safeByAvatar.get(normalized);
+        if (configured) {
+          result.set(normalized, configured);
+        }
+      } catch {
+        // ignore invalid avatar addresses passed in tests
+      }
+    }
+    return result;
   }
 }
 
@@ -152,5 +228,67 @@ export class FakeSlack implements ISlackService {
 
   async notifySlackStartOrCrash(message: string): Promise<void> {
     this.generalNotifications.push(message);
+  }
+}
+
+export class FakeAffiliateGroupEvents implements IAffiliateGroupEventsService {
+  events: AffiliateGroupChanged[] = [];
+
+  async fetchAffiliateGroupChanged(
+    registryAddress: string,
+    targetGroup: string,
+    fromBlock: number,
+    toBlock?: number
+  ): Promise<AffiliateGroupChanged[]> {
+    const upper = toBlock ?? Number.MAX_SAFE_INTEGER;
+    const g = targetGroup.toLowerCase();
+    return this.events.filter(
+      (e) => e.blockNumber >= fromBlock && e.blockNumber <= upper &&
+        (e.oldGroup.toLowerCase() === g || e.newGroup.toLowerCase() === g)
+    );
+  }
+}
+
+export class FakeRouterService implements IRouterService {
+  calls: { baseGroup: string; crcAddresses: string[] }[] = [];
+  txHashes: string[] = [];
+  private readonly responseQueue: string[];
+  failWith?: Error;
+
+  constructor(txHashResponses: string[] = []) {
+    this.responseQueue = [...txHashResponses];
+  }
+
+  async enableCRCForRouting(baseGroup: string, crcAddresses: string[]): Promise<string> {
+    this.calls.push({baseGroup, crcAddresses: [...crcAddresses]});
+    if (this.failWith) {
+      throw this.failWith;
+    }
+
+    const txHash = this.responseQueue.length > 0
+      ? this.responseQueue.shift()!
+      : `0xtx_${this.calls.length}`;
+    this.txHashes.push(txHash);
+    return txHash;
+  }
+}
+
+export class FakeRouterEnablementStore implements IRouterEnablementStore {
+  private readonly enabled = new Set<string>();
+
+  constructor(initial?: string[]) {
+    if (initial) {
+      initial.forEach((address) => this.enabled.add(address.toLowerCase()));
+    }
+  }
+
+  async loadEnabledAddresses(): Promise<string[]> {
+    return Array.from(this.enabled);
+  }
+
+  async markEnabled(addresses: string[]): Promise<void> {
+    for (const address of addresses) {
+      this.enabled.add(address.toLowerCase());
+    }
   }
 }
