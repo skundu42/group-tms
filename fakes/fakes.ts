@@ -325,9 +325,10 @@ export class FakeRouterEnablementStore implements IRouterEnablementStore {
 
 export class FakeAvatarSafeMappingStore implements IAvatarSafeMappingStore {
   private mapping: Map<string, string>;
+  private conflictHistory: Map<string, string[]>;
   saveCalls = 0;
 
-  constructor(initial?: Record<string, string>) {
+  constructor(initial?: Record<string, string>, initialConflictHistory?: Record<string, string[]>) {
     this.mapping = new Map<string, string>();
     if (initial) {
       for (const [avatar, safe] of Object.entries(initial)) {
@@ -336,6 +337,12 @@ export class FakeAvatarSafeMappingStore implements IAvatarSafeMappingStore {
         } catch {
           // ignore invalid addresses in tests
         }
+      }
+    }
+    this.conflictHistory = new Map<string, string[]>();
+    if (initialConflictHistory) {
+      for (const [safe, claimants] of Object.entries(initialConflictHistory)) {
+        this.conflictHistory.set(safe, [...claimants]);
       }
     }
   }
@@ -349,7 +356,25 @@ export class FakeAvatarSafeMappingStore implements IAvatarSafeMappingStore {
     this.mapping = new Map(mapping);
   }
 
+  async loadConflictHistory(): Promise<Map<string, string[]>> {
+    return new Map(
+      Array.from(this.conflictHistory.entries()).map(([k, v]) => [k, [...v]])
+    );
+  }
+
+  async saveConflictHistory(history: Map<string, string[]>): Promise<void> {
+    this.conflictHistory = new Map(
+      Array.from(history.entries()).map(([k, v]) => [k, [...v]])
+    );
+  }
+
   getSavedMapping(): Map<string, string> {
     return new Map(this.mapping);
+  }
+
+  getSavedConflictHistory(): Map<string, string[]> {
+    return new Map(
+      Array.from(this.conflictHistory.entries()).map(([k, v]) => [k, [...v]])
+    );
   }
 }
