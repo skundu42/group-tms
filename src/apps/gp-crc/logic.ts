@@ -168,17 +168,38 @@ export async function runOnce(
     const storedMapping = await avatarSafeMappingStore.load();
     logger.info(`Loaded avatar-safe mapping with ${storedMapping.size} stored entry/entries.`);
 
+    const storedConflictHistory = await avatarSafeMappingStore.loadConflictHistory();
+
     const storedSafeToAvatar = new Map<string, string>();
     for (const [storedAvatar, storedSafe] of storedMapping.entries()) {
       storedSafeToAvatar.set(storedSafe, storedAvatar);
     }
 
-    // Resolve safe conflicts using the stored mapping.
-    // When a safe has multiple avatar claimants and one of them matches
-    // the stored mapping, the OTHER avatar is the new owner.
+    // Resolve safe conflicts using the stored mapping and conflict history.
+    // Only trigger a trust switch when a genuinely new claimant appears
+    // (one that was never seen in any previous run for this safe).
     for (const [conflictedSafe, claimants] of safeConflicts.entries()) {
       const previousAvatar = storedSafeToAvatar.get(conflictedSafe);
+      const knownClaimants = storedConflictHistory.get(conflictedSafe) ?? [];
+      const knownSet = new Set(knownClaimants.map((a) => a.toLowerCase()));
+
+      // Merge current claimants into the conflict history.
+      const updatedKnown = [...knownClaimants];
+      for (const c of claimants) {
+        if (!knownSet.has(c.toLowerCase())) {
+          updatedKnown.push(c);
+          knownSet.add(c.toLowerCase());
+        }
+      }
+      storedConflictHistory.set(conflictedSafe, updatedKnown);
+
+      // Identify genuinely new claimants (never seen before in any prior run).
+      const genuinelyNew = claimants.filter(
+        (c) => !new Set(knownClaimants.map((k) => k.toLowerCase())).has(c.toLowerCase())
+      );
+
       if (!previousAvatar) {
+        // No stored winner — first-time conflict.
         if (claimants.length >= 2) {
           const picked = claimants[claimants.length - 1];
           logger.info(
@@ -197,31 +218,29 @@ export async function runOnce(
         continue;
       }
 
-      const newAvatars = claimants.filter((a) => a !== previousAvatar);
-      if (newAvatars.length === 1) {
-        const newAvatar = newAvatars[0];
+      if (genuinelyNew.length === 0) {
+        // All current claimants were seen before — keep stored winner, no untrust.
         logger.info(
-          `Resolved safe conflict for ${conflictedSafe}: ` +
-          `${previousAvatar} (old) → ${newAvatar} (new). ` +
-          `Promoting ${newAvatar} to eligible and marking ${previousAvatar} for forced untrust.`
+          `Safe ${conflictedSafe} conflict is stable (${claimants.length} claimants, all previously seen). ` +
+          `Keeping stored winner ${previousAvatar}.`
         );
-        avatarsWithSafes.set(newAvatar, conflictedSafe);
-        eligibleCandidates.push(newAvatar);
-        safeReassignmentUntrustedAvatars.push(previousAvatar);
-        storedMapping.delete(previousAvatar);
-        storedMapping.set(newAvatar, conflictedSafe);
-      } else {
-        const picked = newAvatars[newAvatars.length - 1];
-        logger.info(
-          `Safe ${conflictedSafe} has ${newAvatars.length} new claimants besides stored avatar ${previousAvatar}. ` +
-          `Picking last claimant ${picked} as owner and marking ${previousAvatar} for forced untrust.`
-        );
-        avatarsWithSafes.set(picked, conflictedSafe);
-        eligibleCandidates.push(picked);
-        safeReassignmentUntrustedAvatars.push(previousAvatar);
-        storedMapping.delete(previousAvatar);
-        storedMapping.set(picked, conflictedSafe);
+        avatarsWithSafes.set(previousAvatar, conflictedSafe);
+        eligibleCandidates.push(previousAvatar);
+        continue;
       }
+
+      // Genuinely new claimant(s) found — switch ownership.
+      const picked = genuinelyNew[genuinelyNew.length - 1];
+      logger.info(
+        `Safe ${conflictedSafe} has ${genuinelyNew.length} genuinely new claimant(s) ` +
+        `(never seen before). Resolving: ${previousAvatar} (old) → ${picked} (new). ` +
+        `Promoting ${picked} to eligible and marking ${previousAvatar} for forced untrust.`
+      );
+      avatarsWithSafes.set(picked, conflictedSafe);
+      eligibleCandidates.push(picked);
+      safeReassignmentUntrustedAvatars.push(previousAvatar);
+      storedMapping.delete(previousAvatar);
+      storedMapping.set(picked, conflictedSafe);
     }
 
     // Detect reassignments from clean mappings (no conflict case).
@@ -263,6 +282,7 @@ export async function runOnce(
     }
 
     await avatarSafeMappingStore.save(storedMapping);
+    await avatarSafeMappingStore.saveConflictHistory(storedConflictHistory);
     logger.info(`Saved updated avatar-safe mapping with ${storedMapping.size} entry/entries.`);
   }
 

@@ -310,4 +310,130 @@ describe("gp-crc runOnce (query-based)", () => {
     expect(saved.get(newAvatar)).toBe(sharedSafe);
     expect(saved.has(oldAvatar)).toBe(false);
   });
+
+  it("keeps stored winner when all conflict claimants were previously seen (no loop)", async () => {
+    const avatarA = "0x1111000000000000000000000000000000000000";
+    const avatarB = "0x2222000000000000000000000000000000000000";
+    const sharedSafe = "0xSAFE000000000000000000000000000000000001";
+    // Both avatars are registered humans so they appear in the conflict.
+    registerHumanPages = [[avatarA, avatarB]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    // A is already trusted in the group (winner from a previous run).
+    circlesRpc.trusteesByTruster[GROUP_ADDRESS.toLowerCase()] = [avatarA];
+
+    const avatarSafeService = new FakeAvatarSafeService({
+      [avatarA]: sharedSafe,
+      [avatarB]: sharedSafe
+    });
+
+    // Stored mapping says A owns the safe.
+    const mappingStore = new FakeAvatarSafeMappingStore(
+      {[avatarA]: sharedSafe},
+      // Conflict history already knows about both A and B.
+      {[sharedSafe]: [getAddress(avatarA), getAddress(avatarB)]}
+    );
+    const groupService = new FakeGroupService();
+
+    const deps = makeDeps({circlesRpc, avatarSafeService, avatarSafeMappingStore: mappingStore, groupService});
+    const cfg = makeConfig();
+
+    const outcome = await runOnce(deps, cfg);
+
+    // No trust/untrust should happen — conflict is stable.
+    expect(outcome.safeReassignmentUntrustedAvatars).toEqual([]);
+    expect(outcome.untrustedAvatars).toEqual([]);
+    expect(outcome.trustedAvatars).toEqual([]);
+
+    // Mapping should still have A as the winner.
+    const saved = mappingStore.getSavedMapping();
+    expect(saved.get(getAddress(avatarA))).toBe(sharedSafe);
+  });
+
+  it("switches trust only when a genuinely new claimant appears", async () => {
+    const avatarA = "0x1111000000000000000000000000000000000000";
+    const avatarB = "0x2222000000000000000000000000000000000000";
+    const avatarC = "0x3333000000000000000000000000000000000000";
+    const sharedSafe = "0xSAFE000000000000000000000000000000000001";
+    registerHumanPages = [[avatarA, avatarB, avatarC]];
+
+    const circlesRpc = new FakeCirclesRpc();
+    // A is currently trusted.
+    circlesRpc.trusteesByTruster[GROUP_ADDRESS.toLowerCase()] = [avatarA];
+
+    const avatarSafeService = new FakeAvatarSafeService({
+      [avatarA]: sharedSafe,
+      [avatarB]: sharedSafe,
+      [avatarC]: sharedSafe
+    });
+
+    // A is stored winner. History knows A and B but NOT C.
+    const mappingStore = new FakeAvatarSafeMappingStore(
+      {[avatarA]: sharedSafe},
+      {[sharedSafe]: [getAddress(avatarA), getAddress(avatarB)]}
+    );
+    const groupService = new FakeGroupService();
+
+    const deps = makeDeps({circlesRpc, avatarSafeService, avatarSafeMappingStore: mappingStore, groupService});
+    const cfg = makeConfig();
+
+    const outcome = await runOnce(deps, cfg);
+
+    const normalA = getAddress(avatarA);
+    const normalC = getAddress(avatarC);
+
+    // C is genuinely new → A should be untrusted, C trusted.
+    expect(outcome.safeReassignmentUntrustedAvatars).toEqual([normalA]);
+    expect(outcome.untrustedAvatars).toContain(normalA);
+    expect(outcome.trustedAvatars).toContain(normalC);
+
+    // Mapping updated to C.
+    const saved = mappingStore.getSavedMapping();
+    expect(saved.get(normalC)).toBe(sharedSafe);
+    expect(saved.has(normalA)).toBe(false);
+
+    // History now includes all three.
+    const history = mappingStore.getSavedConflictHistory();
+    const safeHistory = history.get(sharedSafe)!.map((a) => a.toLowerCase());
+    expect(safeHistory).toContain(normalA.toLowerCase());
+    expect(safeHistory).toContain(getAddress(avatarB).toLowerCase());
+    expect(safeHistory).toContain(normalC.toLowerCase());
+  });
+
+  it("initializes conflict history on first-time conflict", async () => {
+    const avatarA = "0x1111000000000000000000000000000000000000";
+    const avatarB = "0x2222000000000000000000000000000000000000";
+    const sharedSafe = "0xSAFE000000000000000000000000000000000001";
+    registerHumanPages = [[avatarA, avatarB]];
+
+    const avatarSafeService = new FakeAvatarSafeService({
+      [avatarA]: sharedSafe,
+      [avatarB]: sharedSafe
+    });
+
+    // No prior mapping or history at all.
+    const mappingStore = new FakeAvatarSafeMappingStore();
+    const groupService = new FakeGroupService();
+
+    const deps = makeDeps({avatarSafeService, avatarSafeMappingStore: mappingStore, groupService});
+    const cfg = makeConfig();
+
+    const outcome = await runOnce(deps, cfg);
+
+    const normalB = getAddress(avatarB);
+
+    // Should pick last claimant (B) as winner.
+    expect(outcome.trustedAvatars).toContain(normalB);
+    expect(outcome.safeReassignmentUntrustedAvatars).toEqual([]);
+
+    // Mapping should store B.
+    const saved = mappingStore.getSavedMapping();
+    expect(saved.get(normalB)).toBe(sharedSafe);
+
+    // Conflict history should now contain both A and B.
+    const history = mappingStore.getSavedConflictHistory();
+    const safeHistory = history.get(sharedSafe)!.map((a) => a.toLowerCase());
+    expect(safeHistory).toContain(getAddress(avatarA).toLowerCase());
+    expect(safeHistory).toContain(normalB.toLowerCase());
+  });
 });
