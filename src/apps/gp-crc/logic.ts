@@ -1,35 +1,32 @@
+import {CirclesQuery, CirclesRpc} from "@circles-sdk/data";
 import {getAddress} from "ethers";
-import {IChainRpc} from "../../interfaces/IChainRpc";
 import {IBlacklistingService, IBlacklistServiceVerdict} from "../../interfaces/IBlacklistingService";
 import {ILoggerService} from "../../interfaces/ILoggerService";
 import {IGroupService} from "../../interfaces/IGroupService";
 import {IAvatarSafeService} from "../../interfaces/IAvatarSafeService";
+import {IAvatarSafeMappingStore} from "../../interfaces/IAvatarSafeMappingStore";
 import {ICirclesRpc} from "../../interfaces/ICirclesRpc";
 
 export type RunConfig = {
   rpcUrl: string;
-  startAtBlock: number;
-  confirmationBlocks: number;
-  blockChunkSize?: number;
+  fetchPageSize?: number;
   groupAddress: string;
   dryRun?: boolean;
   groupBatchSize?: number;
 };
 
 export type Deps = {
-  chainRpc: IChainRpc;
   blacklistingService: IBlacklistingService;
   avatarSafeService: IAvatarSafeService;
   circlesRpc: ICirclesRpc;
   groupService?: IGroupService;
   logger: ILoggerService;
+  avatarSafeMappingStore?: IAvatarSafeMappingStore;
 };
 
 export type RunOutcome = {
-  fromBlock: number;
-  toBlock: number;
   processed: boolean;
-  eventCount: number;
+  totalAvatarRows: number;
   uniqueAvatarCount: number;
   allowedAvatars: string[];
   blacklistedAvatars: string[];
@@ -37,35 +34,18 @@ export type RunOutcome = {
   trustTxHashes: string[];
   untrustedAvatars: string[];
   untrustTxHashes: string[];
-  newLastProcessedBlock?: number;
+  safeReassignmentUntrustedAvatars: string[];
 };
 
-type RegisterHumanEvent = {
+type RegisterHumanRow = {
+  avatar?: string;
   blockNumber: number;
-  avatar: string;
-  transactionHash?: string;
+  transactionIndex: number;
+  logIndex: number;
 };
 
-type CirclesEventsResponse = {
-  result?: unknown;
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-};
-
-type BlockRange = {
-  from: number;
-  to: number;
-};
-
-export const DEFAULT_BLOCK_CHUNK_SIZE = 50_0000;
+export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
 export const DEFAULT_GROUP_BATCH_SIZE = 10;
-
-const EVENT_FETCH_TIMEOUT_MS = 30_000;
-const EVENT_FETCH_MAX_ATTEMPTS = 3;
-const EVENT_FETCH_RETRY_DELAY_MS = 2_000;
 
 const BLACKLIST_FETCH_MAX_ATTEMPTS = 3;
 const BLACKLIST_FETCH_RETRY_DELAY_MS = 2_000;
@@ -79,8 +59,8 @@ export async function runOnce(
   deps: Deps,
   cfg: RunConfig
 ): Promise<RunOutcome> {
-  const {chainRpc, blacklistingService, avatarSafeService, circlesRpc, groupService, logger} = deps;
-  const blockChunkSize = Math.max(1, cfg.blockChunkSize ?? DEFAULT_BLOCK_CHUNK_SIZE);
+  const {blacklistingService, avatarSafeService, circlesRpc, groupService, logger, avatarSafeMappingStore} = deps;
+  const fetchPageSize = Math.max(1, cfg.fetchPageSize ?? DEFAULT_FETCH_PAGE_SIZE);
   const groupBatchSize = Math.max(1, cfg.groupBatchSize ?? DEFAULT_GROUP_BATCH_SIZE);
   const dryRun = !!cfg.dryRun;
   const groupAddress = normalizeAddress(cfg.groupAddress);
@@ -93,48 +73,11 @@ export async function runOnce(
     throw new Error("Group service dependency is required when gp-crc is not running in dry-run mode");
   }
 
-  const fromBlock = Math.max(0, cfg.startAtBlock);
+  const humansLogger = logger.child("humans");
+  const humanAvatars = await fetchAllHumanAvatars(cfg.rpcUrl, fetchPageSize, humansLogger);
+  const uniqueAvatars = uniqueNormalizedAddresses(humanAvatars);
 
-  const head = await chainRpc.getHeadBlock();
-  const safeHeadBlock = Math.max(0, head.blockNumber - cfg.confirmationBlocks);
-
-  logger.info(`Head block: ${head.blockNumber}, safe head (with ${cfg.confirmationBlocks} confirmations): ${safeHeadBlock}`);
-
-  if (fromBlock > safeHeadBlock) {
-    logger.info(`No confirmed blocks to scan yet (next from ${fromBlock}). Waiting for more confirmations.`);
-    return {
-      fromBlock,
-      toBlock: safeHeadBlock,
-      processed: false,
-      eventCount: 0,
-      uniqueAvatarCount: 0,
-      allowedAvatars: [],
-      blacklistedAvatars: [],
-      trustedAvatars: [],
-      trustTxHashes: [],
-      untrustedAvatars: [],
-      untrustTxHashes: [],
-      newLastProcessedBlock: safeHeadBlock
-    };
-  }
-
-  logger.info(`Scanning RegisterHuman events in block range [${fromBlock}, ${safeHeadBlock}].`);
-
-  const ranges = createBlockRanges(fromBlock, safeHeadBlock, blockChunkSize);
-  const events: RegisterHumanEvent[] = [];
-
-  for (const range of ranges) {
-    const chunkEvents = await fetchRegisterHumanEvents(cfg.rpcUrl, range, logger);
-    logger.debug(`Fetched ${chunkEvents.length} events for blocks [${range.from}, ${range.to}].`);
-    events.push(...chunkEvents);
-  }
-
-  const avatars = events
-    .map((event) => event.avatar)
-    .filter((address): address is string => !!address);
-
-  const uniqueAvatars = Array.from(new Set(avatars));
-  logger.info(`Found ${events.length} RegisterHuman events with ${uniqueAvatars.length} unique avatars.`);
+  humansLogger.info(`Fetched ${humanAvatars.length} RegisterHuman rows (${uniqueAvatars.length} unique avatars).`);
 
   const rawGroupTrustees = await circlesRpc.fetchAllTrustees(groupAddress);
   const currentTrusteesMap = new Map<string, string>();
@@ -157,10 +100,8 @@ export async function runOnce(
   if (evaluationCandidates.length === 0) {
     logger.info(`No avatars to evaluate against the blacklist.`);
     return {
-      fromBlock,
-      toBlock: safeHeadBlock,
       processed: true,
-      eventCount: events.length,
+      totalAvatarRows: humanAvatars.length,
       uniqueAvatarCount: 0,
       allowedAvatars: [],
       blacklistedAvatars: [],
@@ -168,7 +109,7 @@ export async function runOnce(
       trustTxHashes: [],
       untrustedAvatars: [],
       untrustTxHashes: [],
-      newLastProcessedBlock: safeHeadBlock
+      safeReassignmentUntrustedAvatars: []
     };
   }
 
@@ -179,8 +120,7 @@ export async function runOnce(
   );
 
   logger.info(
-    `Avatar evaluation summary for [${fromBlock}, ${safeHeadBlock}]: ` +
-    `${uniqueAvatars.length} new unique avatar(s); evaluated ${evaluationCandidates.length} total ` +
+    `Avatar evaluation summary: ${uniqueAvatars.length} unique avatar(s); evaluated ${evaluationCandidates.length} total ` +
     `(allowed ${allowedCandidates.length}, blacklisted ${blacklistedCandidates.length}).`
   );
 
@@ -192,9 +132,14 @@ export async function runOnce(
 
   const eligibleCandidates: string[] = [];
   const avatarsWithoutSafe: string[] = [];
+  let avatarsWithSafes = new Map<string, string>();
+  let safeConflicts = new Map<string, string[]>();
   if (allowedCandidates.length > 0) {
     logger.info(`Checking configured safes for ${allowedCandidates.length} allowed avatar(s).`);
-    const avatarsWithSafes = await avatarSafeService.findAvatarsWithSafes(allowedCandidates);
+    const safeResult = await avatarSafeService.findAvatarsWithSafes(allowedCandidates);
+    avatarsWithSafes = safeResult.mappings;
+    safeConflicts = safeResult.safeConflicts;
+
     for (const avatar of allowedCandidates) {
       if (avatarsWithSafes.has(avatar)) {
         eligibleCandidates.push(avatar);
@@ -204,8 +149,8 @@ export async function runOnce(
     }
 
     logger.info(
-      `Avatar safe summary for [${fromBlock}, ${safeHeadBlock}]: ` +
-      `${eligibleCandidates.length} with safes, ${avatarsWithoutSafe.length} without safes.`
+      `Avatar safe summary: ${eligibleCandidates.length} with safes, ${avatarsWithoutSafe.length} without safes` +
+      `${safeConflicts.size > 0 ? `, ${safeConflicts.size} safe conflict(s)` : ""}.`
     );
 
     if (avatarsWithoutSafe.length > 0) {
@@ -216,6 +161,109 @@ export async function runOnce(
     }
   } else {
     logger.info(`No allowed avatars to verify for safes.`);
+  }
+
+  const safeReassignmentUntrustedAvatars: string[] = [];
+  if (avatarSafeMappingStore) {
+    const storedMapping = await avatarSafeMappingStore.load();
+    logger.info(`Loaded avatar-safe mapping with ${storedMapping.size} stored entry/entries.`);
+
+    const storedSafeToAvatar = new Map<string, string>();
+    for (const [storedAvatar, storedSafe] of storedMapping.entries()) {
+      storedSafeToAvatar.set(storedSafe, storedAvatar);
+    }
+
+    // Resolve safe conflicts using the stored mapping.
+    // When a safe has multiple avatar claimants and one of them matches
+    // the stored mapping, the OTHER avatar is the new owner.
+    for (const [conflictedSafe, claimants] of safeConflicts.entries()) {
+      const previousAvatar = storedSafeToAvatar.get(conflictedSafe);
+      if (!previousAvatar) {
+        if (claimants.length >= 2) {
+          const picked = claimants[claimants.length - 1];
+          logger.info(
+            `Safe ${conflictedSafe} has ${claimants.length} claimants but no stored mapping. ` +
+            `Picking last claimant ${picked} as owner.`
+          );
+          avatarsWithSafes.set(picked, conflictedSafe);
+          eligibleCandidates.push(picked);
+          storedMapping.set(picked, conflictedSafe);
+        } else {
+          logger.info(
+            `Safe ${conflictedSafe} has ${claimants.length} claimant(s) but no stored mapping. ` +
+            `Skipping conflict resolution until next run.`
+          );
+        }
+        continue;
+      }
+
+      const newAvatars = claimants.filter((a) => a !== previousAvatar);
+      if (newAvatars.length === 1) {
+        const newAvatar = newAvatars[0];
+        logger.info(
+          `Resolved safe conflict for ${conflictedSafe}: ` +
+          `${previousAvatar} (old) → ${newAvatar} (new). ` +
+          `Promoting ${newAvatar} to eligible and marking ${previousAvatar} for forced untrust.`
+        );
+        avatarsWithSafes.set(newAvatar, conflictedSafe);
+        eligibleCandidates.push(newAvatar);
+        safeReassignmentUntrustedAvatars.push(previousAvatar);
+        storedMapping.delete(previousAvatar);
+        storedMapping.set(newAvatar, conflictedSafe);
+      } else {
+        const picked = newAvatars[newAvatars.length - 1];
+        logger.info(
+          `Safe ${conflictedSafe} has ${newAvatars.length} new claimants besides stored avatar ${previousAvatar}. ` +
+          `Picking last claimant ${picked} as owner and marking ${previousAvatar} for forced untrust.`
+        );
+        avatarsWithSafes.set(picked, conflictedSafe);
+        eligibleCandidates.push(picked);
+        safeReassignmentUntrustedAvatars.push(previousAvatar);
+        storedMapping.delete(previousAvatar);
+        storedMapping.set(picked, conflictedSafe);
+      }
+    }
+
+    // Detect reassignments from clean mappings (no conflict case).
+    for (const [currentAvatar, currentSafe] of avatarsWithSafes.entries()) {
+      const previousAvatar = storedSafeToAvatar.get(currentSafe);
+      if (previousAvatar && previousAvatar !== currentAvatar) {
+        if (!safeReassignmentUntrustedAvatars.includes(previousAvatar)) {
+          logger.info(
+            `Safe ${currentSafe} reassigned from ${previousAvatar} to ${currentAvatar}. ` +
+            `Marking ${previousAvatar} for forced untrust.`
+          );
+          safeReassignmentUntrustedAvatars.push(previousAvatar);
+          storedMapping.delete(previousAvatar);
+        }
+      }
+
+      const previousSafe = storedMapping.get(currentAvatar);
+      if (previousSafe && previousSafe !== currentSafe) {
+        logger.info(`Avatar ${currentAvatar} changed safe from ${previousSafe} to ${currentSafe}.`);
+      }
+
+      storedMapping.set(currentAvatar, currentSafe);
+    }
+
+    // Remove stale entries for avatars that were evaluated but no longer have a safe.
+    const evaluationCandidateLowerSet = new Set(
+      evaluationCandidates.map((a) => a.toLowerCase())
+    );
+    for (const [storedAvatar] of Array.from(storedMapping.entries())) {
+      if (
+        evaluationCandidateLowerSet.has(storedAvatar.toLowerCase()) &&
+        !avatarsWithSafes.has(storedAvatar)
+      ) {
+        logger.info(
+          `Removing stale mapping entry for avatar ${storedAvatar} (evaluated but no safe found).`
+        );
+        storedMapping.delete(storedAvatar);
+      }
+    }
+
+    await avatarSafeMappingStore.save(storedMapping);
+    logger.info(`Saved updated avatar-safe mapping with ${storedMapping.size} entry/entries.`);
   }
 
   const trustedAvatars: string[] = [];
@@ -231,6 +279,16 @@ export async function runOnce(
     .filter((lower) => !eligibleLowerSet.has(lower))
     .map((lower) => currentTrusteesMap.get(lower))
     .filter((address): address is string => !!address);
+
+  const untrustLowerSet = new Set(avatarsToUntrust.map((a) => a.toLowerCase()));
+  for (const avatar of safeReassignmentUntrustedAvatars) {
+    const lower = avatar.toLowerCase();
+    if (currentTrustedLowerSet.has(lower) && !untrustLowerSet.has(lower)) {
+      const normalizedAddress = currentTrusteesMap.get(lower) || avatar;
+      avatarsToUntrust.push(normalizedAddress);
+      untrustLowerSet.add(lower);
+    }
+  }
 
   const alreadyTrustedFromEvents = allowedAvatars
     .filter((avatar) => eligibleLowerSet.has(avatar.toLowerCase()))
@@ -310,10 +368,8 @@ export async function runOnce(
   }
 
   return {
-    fromBlock,
-    toBlock: safeHeadBlock,
     processed: true,
-    eventCount: events.length,
+    totalAvatarRows: humanAvatars.length,
     uniqueAvatarCount: uniqueAvatars.length,
     allowedAvatars,
     blacklistedAvatars,
@@ -321,210 +377,10 @@ export async function runOnce(
     trustTxHashes,
     untrustedAvatars,
     untrustTxHashes,
-    newLastProcessedBlock: safeHeadBlock
+    safeReassignmentUntrustedAvatars
   };
 }
 
-async function fetchRegisterHumanEvents(
-  rpcUrl: string,
-  range: BlockRange,
-  logger: ILoggerService
-): Promise<RegisterHumanEvent[]> {
-  const payload = {
-    jsonrpc: "2.0",
-    id: `gp-crc-${range.from}-${range.to}`,
-    method: "circles_events",
-    params: [
-      null,
-      range.from,
-      range.to,
-      ["CrcV2_RegisterHuman"]
-    ]
-  };
-  for (let attempt = 1; attempt <= EVENT_FETCH_MAX_ATTEMPTS; attempt++) {
-    try {
-      const response = await timedFetch(
-        rpcUrl,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        },
-        EVENT_FETCH_TIMEOUT_MS
-      );
-
-      if (!response.ok) {
-        const status = response.status;
-        const error = new Error(`Failed to fetch RegisterHuman events: HTTP ${status} ${response.statusText}`);
-        if (attempt < EVENT_FETCH_MAX_ATTEMPTS && isRetryableStatus(status)) {
-          logger.warn(`Fetch attempt ${attempt} for blocks [${range.from}, ${range.to}] failed with status ${status}. Retrying in ${EVENT_FETCH_RETRY_DELAY_MS} ms.`);
-          await wait(EVENT_FETCH_RETRY_DELAY_MS);
-          continue;
-        }
-        throw error;
-      }
-
-      const body = await response.json() as CirclesEventsResponse;
-      if (body.error) {
-        throw new Error(`RPC error ${body.error.code}: ${body.error.message}`);
-      }
-
-      const rawEvents = Array.isArray(body.result) ? body.result : [];
-      const parsedEvents: RegisterHumanEvent[] = [];
-      let missingAvatarCount = 0;
-      let missingBlockNumberCount = 0;
-
-      for (const raw of rawEvents) {
-        const parsed = parseRegisterHumanEvent(raw);
-        if (parsed.ok) {
-          parsedEvents.push(parsed.event);
-        } else if (parsed.reason === "missing_avatar") {
-          missingAvatarCount += 1;
-        } else {
-          missingBlockNumberCount += 1;
-        }
-      }
-
-      const skippedCount = missingAvatarCount + missingBlockNumberCount;
-      if (skippedCount > 0) {
-        const reasons: string[] = [];
-        if (missingBlockNumberCount > 0) {
-          reasons.push(`missing or invalid block number: ${missingBlockNumberCount}`);
-        }
-        if (missingAvatarCount > 0) {
-          reasons.push(`missing or invalid avatar address: ${missingAvatarCount}`);
-        }
-        logger.warn(`Skipped ${skippedCount} RegisterHuman events (${reasons.join(", ")}).`);
-      }
-
-      return parsedEvents;
-    } catch (error) {
-      const retryable = isRetryableFetchError(error);
-      if (attempt >= EVENT_FETCH_MAX_ATTEMPTS || !retryable) {
-        throw error instanceof Error ? error : new Error(String(error));
-      }
-
-      logger.warn(`Fetch attempt ${attempt} for blocks [${range.from}, ${range.to}] failed (${formatErrorMessage(error)}). Retrying in ${EVENT_FETCH_RETRY_DELAY_MS} ms.`);
-      await wait(EVENT_FETCH_RETRY_DELAY_MS);
-    }
-  }
-
-  throw new Error("Failed to fetch RegisterHuman events after retries");
-}
-
-type ParseFailureReason = "missing_block_number" | "missing_avatar";
-
-type ParseRegisterHumanResult =
-  | {ok: true; event: RegisterHumanEvent}
-  | {ok: false; reason: ParseFailureReason};
-
-function parseRegisterHumanEvent(raw: unknown): ParseRegisterHumanResult {
-  if (typeof raw !== "object" || raw === null) {
-    return {ok: false, reason: "missing_block_number"};
-  }
-
-  const obj = raw as Record<string, unknown>;
-  const blockNumber = extractBlockNumber(obj);
-  if (blockNumber === null) {
-    return {ok: false, reason: "missing_block_number"};
-  }
-
-  const avatar = extractAvatar(obj);
-  if (!avatar) {
-    return {ok: false, reason: "missing_avatar"};
-  }
-
-  const transactionHash = extractHash(obj);
-  return {
-    ok: true,
-    event: {
-      blockNumber,
-      avatar,
-      transactionHash
-    }
-  };
-}
-
-function extractBlockNumber(obj: Record<string, unknown>): number | null {
-  const sources: Record<string, unknown>[] = [obj];
-
-  const values = obj["values"];
-  if (values && typeof values === "object") {
-    sources.push(values as Record<string, unknown>);
-  }
-
-  for (const source of sources) {
-    const candidates = [
-      source["blockNumber"],
-      source["block_number"],
-      source["block"],
-    ];
-
-    for (const candidate of candidates) {
-      if (typeof candidate === "number" && Number.isFinite(candidate)) {
-        return candidate;
-      }
-      if (typeof candidate === "string") {
-        const trimmed = candidate.trim();
-        if (trimmed.length === 0) {
-          continue;
-        }
-        const parsed = trimmed.startsWith("0x") || trimmed.startsWith("0X")
-          ? Number.parseInt(trimmed.slice(2), 16)
-          : Number.parseInt(trimmed, 10);
-        if (!Number.isNaN(parsed)) {
-          return parsed;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function extractAvatar(obj: Record<string, unknown>): string | null {
-  const values = obj["values"];
-  if (!values || typeof values !== "object") {
-    return null;
-  }
-
-  const avatar = (values as Record<string, unknown>)["avatar"];
-  if (typeof avatar !== "string") {
-    return null;
-  }
-
-  return normalizeAddress(avatar);
-}
-
-function extractHash(obj: Record<string, unknown>): string | undefined {
-  const sources: Record<string, unknown>[] = [obj];
-
-  const values = obj["values"];
-  if (values && typeof values === "object") {
-    sources.push(values as Record<string, unknown>);
-  }
-
-  for (const source of sources) {
-    const candidates = [
-      source["transactionHash"],
-      source["transaction_hash"],
-      source["txHash"],
-    ];
-
-    for (const candidate of candidates) {
-      if (typeof candidate === "string") {
-        const trimmed = candidate.trim();
-        if (trimmed.length > 0) {
-          return trimmed;
-        }
-      }
-    }
-  }
-
-  return undefined;
-}
 
 function normalizeAddress(value: string): string | null {
   const trimmed = value.trim();
@@ -539,13 +395,63 @@ function normalizeAddress(value: string): string | null {
   }
 }
 
-function createBlockRanges(from: number, to: number, chunkSize: number): BlockRange[] {
-  const ranges: BlockRange[] = [];
-  for (let start = from; start <= to; start += chunkSize) {
-    const end = Math.min(to, start + chunkSize - 1);
-    ranges.push({from: start, to: end});
+async function fetchAllHumanAvatars(
+  rpcUrl: string,
+  pageSize: number,
+  logger: ILoggerService
+): Promise<string[]> {
+  const rpc = new CirclesRpc(rpcUrl);
+  const query = new CirclesQuery<RegisterHumanRow>(rpc, {
+    namespace: "CrcV2",
+    table: "RegisterHuman",
+    columns: ["avatar", "blockNumber", "transactionIndex", "logIndex"],
+    sortOrder: "ASC",
+    limit: pageSize
+  });
+
+  const avatars: string[] = [];
+  let pages = 0;
+
+  while (await query.queryNextPage()) {
+    pages += 1;
+    const rows = query.currentPage?.results ?? [];
+    for (const row of rows) {
+      if (!row || typeof row.avatar !== "string") {
+        continue;
+      }
+
+      const normalized = normalizeAddress(row.avatar);
+      if (normalized) {
+        avatars.push(normalized);
+      }
+    }
   }
-  return ranges;
+
+  logger.info(`Fetched ${avatars.length} avatars from RegisterHuman table across ${pages} page(s).`);
+
+  return avatars;
+}
+
+function uniqueNormalizedAddresses(addresses: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const address of addresses) {
+    const normalized = normalizeAddress(address);
+    if (!normalized) {
+      continue;
+    }
+
+    const lower = normalized.toLowerCase();
+    if (seen.has(lower)) {
+      continue;
+    }
+
+    seen.add(lower);
+    result.push(normalized);
+  }
+
+  return result;
 }
 
 function chunkArray<T>(values: T[], chunkSize: number): T[][] {

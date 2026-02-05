@@ -1,15 +1,15 @@
-import {ChainRpcService} from "../../services/chainRpcService";
 import {BlacklistingService} from "../../services/blacklistingService";
 import {LoggerService} from "../../services/loggerService";
 import {SlackService} from "../../services/slackService";
 import {MetriSafeService} from "../../services/metriSafeService";
+import {InMemoryAvatarSafeMappingStore} from "../../services/inMemoryAvatarSafeMappingStore";
 import {CirclesRpcService} from "../../services/circlesRpcService";
 import {SafeGroupService} from "../../services/safeGroupService";
 import {IGroupService} from "../../interfaces/IGroupService";
 import {
   runOnce,
   RunConfig,
-  DEFAULT_BLOCK_CHUNK_SIZE,
+  DEFAULT_FETCH_PAGE_SIZE,
   DEFAULT_GROUP_BATCH_SIZE
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
@@ -27,13 +27,10 @@ const dryRun = process.env.DRY_RUN === "1";
 const metriSafeGraphqlUrl = process.env.METRI_SAFE_GRAPHQL_URL || "https://gnosis-e702590.dedicated.hyperindex.xyz/v1/graphql" ;
 const metriSafeApiKey = process.env.METRI_SAFE_API_KEY || "";
 
-const startAtBlock = parseEnvInt("START_AT_BLOCK", 31734312);
-const confirmationBlocks = 10;
-const blockChunkSize = DEFAULT_BLOCK_CHUNK_SIZE;
+const fetchPageSize = parseEnvInt("GP_CRC_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
 const pollIntervalMs = 10 * 60 * 1_000;
 const groupBatchSize = DEFAULT_GROUP_BATCH_SIZE;
 
-const chainRpc = new ChainRpcService(rpcUrl);
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const slackService = new SlackService(slackWebhookUrl);
@@ -51,6 +48,8 @@ if (!metriSafeGraphqlUrl) {
 
 avatarSafeService = new MetriSafeService(metriSafeGraphqlUrl, metriSafeApiKey || undefined);
 
+const avatarSafeMappingStore = new InMemoryAvatarSafeMappingStore();
+
 if (!dryRun && safeSignerPrivateKey.trim().length === 0) {
   throw new Error("GP_CRC_SAFE_SIGNER_PRIVATE_KEY is required when not running gp-crc in dry-run mode");
 }
@@ -67,9 +66,7 @@ const runLogger = rootLogger.child("run");
 
 const config: RunConfig = {
   rpcUrl,
-  startAtBlock,
-  confirmationBlocks,
-  blockChunkSize,
+  fetchPageSize,
   groupAddress,
   dryRun,
   groupBatchSize
@@ -77,8 +74,7 @@ const config: RunConfig = {
 
 rootLogger.info("Starting gp-crc watcher with config:");
 rootLogger.info(`  - rpcUrl=${rpcUrl}`);
-rootLogger.info(`  - startAtBlock=${startAtBlock}`);
-rootLogger.info(`  - confirmationBlocks=${confirmationBlocks}`);
+rootLogger.info(`  - fetchPageSize=${fetchPageSize}`);
 rootLogger.info(`  - pollIntervalMs=${pollIntervalMs}`);
 rootLogger.info(`  - groupAddress=${groupAddress}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
@@ -113,12 +109,12 @@ async function mainLoop(): Promise<void> {
     try {
       const outcome = await runOnce(
         {
-          chainRpc,
           blacklistingService,
           avatarSafeService,
           circlesRpc,
           groupService,
-          logger: runLogger
+          logger: runLogger,
+          avatarSafeMappingStore
         },
         config
       );
@@ -187,7 +183,7 @@ async function notifySlackStartup(): Promise<void> {
     `Monitoring CRC avatars who also have a GP account in Metri.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
-    `- Start Block: ${startAtBlock}\n` +
+    `- Fetch Page Size: ${fetchPageSize}\n` +
     `- Metri Safe GraphQL: ${metriSafeGraphqlUrl}\n` +
     `- Safe: ${safeAddress || "(not set)"}\n` +
     `- Safe signer configured: ${safeSignerPrivateKey.trim().length > 0}\n` +

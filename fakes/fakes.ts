@@ -13,9 +13,10 @@ import {
 import {ISlackService} from "../src/interfaces/ISlackService";
 import {ILoggerService} from "../src/interfaces/ILoggerService";
 import {AffiliateGroupChanged, IAffiliateGroupEventsService} from "../src/interfaces/IAffiliateGroupEventsService";
-import {IAvatarSafeService} from "../src/interfaces/IAvatarSafeService";
+import {type AvatarSafeResult, IAvatarSafeService} from "../src/interfaces/IAvatarSafeService";
 import {IRouterService} from "../src/interfaces/IRouterService";
 import {IRouterEnablementStore} from "../src/interfaces/IRouterEnablementStore";
+import {IAvatarSafeMappingStore} from "../src/interfaces/IAvatarSafeMappingStore";
 
 export class FakeLogger implements ILoggerService {
   logs: { level: "info" | "warn" | "error" | "debug" | "table"; args: unknown[] }[] = [];
@@ -181,7 +182,7 @@ export class FakeAvatarSafeService implements IAvatarSafeService {
     }
   }
 
-  async findAvatarsWithSafes(avatars: string[]): Promise<Map<string, string>> {
+  async findAvatarsWithSafes(avatars: string[]): Promise<AvatarSafeResult> {
     const result = new Map<string, string>();
     for (const avatar of avatars) {
       try {
@@ -199,7 +200,26 @@ export class FakeAvatarSafeService implements IAvatarSafeService {
         // ignore invalid avatar addresses passed in tests
       }
     }
-    return result;
+
+    const safeConflicts = new Map<string, string[]>();
+    const avatarsBySafe = new Map<string, string[]>();
+    for (const [avatar, safe] of result.entries()) {
+      const existing = avatarsBySafe.get(safe);
+      if (existing) {
+        existing.push(avatar);
+      } else {
+        avatarsBySafe.set(safe, [avatar]);
+      }
+    }
+    for (const [safe, avatarsForSafe] of avatarsBySafe.entries()) {
+      if (avatarsForSafe.length < 2) continue;
+      safeConflicts.set(safe, avatarsForSafe);
+      for (const avatar of avatarsForSafe) {
+        result.delete(avatar);
+      }
+    }
+
+    return {mappings: result, safeConflicts};
   }
 }
 
@@ -300,5 +320,36 @@ export class FakeRouterEnablementStore implements IRouterEnablementStore {
     for (const address of addresses) {
       this.enabled.add(address.toLowerCase());
     }
+  }
+}
+
+export class FakeAvatarSafeMappingStore implements IAvatarSafeMappingStore {
+  private mapping: Map<string, string>;
+  saveCalls = 0;
+
+  constructor(initial?: Record<string, string>) {
+    this.mapping = new Map<string, string>();
+    if (initial) {
+      for (const [avatar, safe] of Object.entries(initial)) {
+        try {
+          this.mapping.set(getAddress(avatar), safe);
+        } catch {
+          // ignore invalid addresses in tests
+        }
+      }
+    }
+  }
+
+  async load(): Promise<Map<string, string>> {
+    return new Map(this.mapping);
+  }
+
+  async save(mapping: Map<string, string>): Promise<void> {
+    this.saveCalls += 1;
+    this.mapping = new Map(mapping);
+  }
+
+  getSavedMapping(): Map<string, string> {
+    return new Map(this.mapping);
   }
 }
