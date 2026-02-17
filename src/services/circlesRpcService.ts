@@ -10,16 +10,54 @@ const CIRCLES_HUB_INTERFACE = new Interface([
 ]);
 
 /**
- * Extract the events array from a circles_events RPC response.
+ * Extract the events array from a circles_events RPC response and normalise
+ * each raw event into the flat SDK shape ({$event, backer, blockNumber, ...}
+ * instead of {event, values: {backer, blockNumber, ...}}).
+ *
  * Handles both the legacy flat array format and the new paginated
  * {events: [], hasMore, nextCursor} envelope.
  */
 function unwrapEventsResult(result: unknown): unknown[] {
-  if (Array.isArray(result)) return result;
-  if (result && typeof result === "object" && "events" in result) {
-    return (result as { events: unknown[] }).events;
+  let events: unknown[];
+  if (Array.isArray(result)) {
+    events = result;
+  } else if (result && typeof result === "object" && "events" in result) {
+    events = (result as { events: unknown[] }).events;
+  } else {
+    return [];
   }
-  return [];
+  return events.map(flattenRawEvent);
+}
+
+const NUMERIC_FIELDS = new Set(["blockNumber", "timestamp", "transactionIndex", "logIndex"]);
+
+/**
+ * Flatten a raw RPC event from {event, values: {field1, field2, ...}}
+ * to the SDK shape {$event, field1, field2, ...}.
+ * Hex-encoded numeric fields (blockNumber, timestamp, etc.) are parsed to numbers.
+ */
+function flattenRawEvent(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+
+  // Already in SDK shape (has $event) — pass through
+  if ("$event" in obj) return obj;
+
+  // Raw RPC shape: {event: "CrcV2_...", values: {...}}
+  if ("event" in obj && "values" in obj && typeof obj.values === "object" && obj.values) {
+    const values = obj.values as Record<string, unknown>;
+    const flat: Record<string, unknown> = { $event: obj.event };
+    for (const [key, val] of Object.entries(values)) {
+      if (NUMERIC_FIELDS.has(key) && typeof val === "string" && val.startsWith("0x")) {
+        flat[key] = parseInt(val, 16);
+      } else {
+        flat[key] = val;
+      }
+    }
+    return flat;
+  }
+
+  return raw;
 }
 
 export class CirclesRpcService implements ICirclesRpc {
