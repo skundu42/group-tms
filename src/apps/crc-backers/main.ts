@@ -42,7 +42,14 @@ const chainRpc = new ChainRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const slackService = new SlackService(slackWebhookUrl);
 const groupService = dryRun ? undefined : new SafeGroupService(rpcUrl, safeSignerPrivateKey, safeAddress);
-const cowSwapService = new BackingInstanceService(rpcUrl, safeSignerPrivateKey, safeAddress);
+// In dry-run mode, skip passing signer keys so BackingInstanceService doesn't
+// eagerly initialise Safe Protocol Kit (which calls eth_chainId via viem).
+// simulate* methods only use the ethers provider; execute methods throw if needed.
+const cowSwapService = new BackingInstanceService(
+  rpcUrl,
+  dryRun ? undefined : safeSignerPrivateKey,
+  dryRun ? undefined : safeAddress
+);
 // Track the next block to scan purely in memory between loop iterations.
 let nextFromBlock = deployedAtBlock;
 
