@@ -124,6 +124,7 @@ async function mainLoop(): Promise<void> {
   while (true) {
     const runStartedAt = Date.now();
     try {
+      await refreshBlacklist();
       const outcome = await runOnce(
         {
           blacklistingService,
@@ -193,20 +194,19 @@ function parseEnvNumber(name: string, fallback: number): number {
   return parsed;
 }
 
-async function initializeBlacklist(): Promise<void> {
+async function refreshBlacklist(): Promise<void> {
   try {
-    rootLogger.info("Loading blacklist from remote service...");
+    runLogger.info("Refreshing blacklist from remote service...");
     await blacklistingService.loadBlacklist();
     const count = blacklistingService.getBlacklistCount();
-    rootLogger.info(`Blacklist loaded successfully. ${count} addresses blacklisted.`);
+    runLogger.info(`Blacklist refreshed successfully. ${count} addresses blacklisted.`);
   } catch (error) {
-    rootLogger.error("Failed to load blacklist:", error);
+    runLogger.error("Failed to refresh blacklist:", error);
     throw error;
   }
 }
 
 async function start(): Promise<void> {
-  await initializeBlacklist();
   await mainLoop();
 }
 

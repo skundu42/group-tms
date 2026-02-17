@@ -33,15 +33,14 @@ const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const enablementStore = new InMemoryRouterEnablementStore();
 
-// Load blacklist before starting the main loop
-async function initializeBlacklist(): Promise<void> {
+async function refreshBlacklist(): Promise<void> {
   try {
-    rootLogger.info("Loading blacklist from remote service...");
+    runLogger.info("Refreshing blacklist from remote service...");
     await blacklistingService.loadBlacklist();
     const count = blacklistingService.getBlacklistCount();
-    rootLogger.info(`Blacklist loaded successfully. ${count} addresses blacklisted.`);
+    runLogger.info(`Blacklist refreshed successfully. ${count} addresses blacklisted.`);
   } catch (error) {
-    rootLogger.error("Failed to load blacklist:", error);
+    runLogger.error("Failed to refresh blacklist:", error);
     throw error;
   }
 }
@@ -95,6 +94,7 @@ process.on("SIGTERM", async () => {
 async function mainLoop(): Promise<void> {
   while (true) {
     try {
+      await refreshBlacklist();
       const outcome = await runOnce(
         {
           circlesRpc,
@@ -128,7 +128,6 @@ async function mainLoop(): Promise<void> {
 }
 
 async function start(): Promise<void> {
-  await initializeBlacklist();
   await mainLoop();
 }
 
