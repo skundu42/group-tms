@@ -9,6 +9,19 @@ const CIRCLES_HUB_INTERFACE = new Interface([
   "function isHuman(address account) view returns (bool)"
 ]);
 
+/**
+ * Extract the events array from a circles_events RPC response.
+ * Handles both the legacy flat array format and the new paginated
+ * {events: [], hasMore, nextCursor} envelope.
+ */
+function unwrapEventsResult(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && "events" in result) {
+    return (result as { events: unknown[] }).events;
+  }
+  return [];
+}
+
 export class CirclesRpcService implements ICirclesRpc {
   private readonly provider: JsonRpcProvider;
 
@@ -48,24 +61,22 @@ export class CirclesRpcService implements ICirclesRpc {
 
   async fetchBackingCompletedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingCompleted[]> {
     const rpc = new CirclesRpc(this.rpcUrl);
-    const data = new CirclesData(rpc);
-    return (await data.getEvents(undefined, fromBlock, toBlock, ["CrcV2_CirclesBackingCompleted"], [{
-      Type: "FilterPredicate",
-      FilterType: "Equals",
-      Column: "emitter",
-      Value: backingFactoryAddress
-    }])) as CrcV2_CirclesBackingCompleted[];
+    const response = await rpc.call<unknown>("circles_events", [
+      undefined, fromBlock, toBlock,
+      ["CrcV2_CirclesBackingCompleted"],
+      [{ Type: "FilterPredicate", FilterType: "Equals", Column: "emitter", Value: backingFactoryAddress }]
+    ]);
+    return unwrapEventsResult(response.result) as CrcV2_CirclesBackingCompleted[];
   }
 
   async fetchBackingInitiatedEvents(backingFactoryAddress: string, fromBlock: number, toBlock?: number): Promise<CrcV2_CirclesBackingInitiated[]> {
     const rpc = new CirclesRpc(this.rpcUrl);
-    const data = new CirclesData(rpc);
-    return (await data.getEvents(undefined, fromBlock, toBlock, ["CrcV2_CirclesBackingInitiated"], [{
-      Type: "FilterPredicate",
-      FilterType: "Equals",
-      Column: "emitter",
-      Value: backingFactoryAddress
-    }])) as CrcV2_CirclesBackingInitiated[];
+    const response = await rpc.call<unknown>("circles_events", [
+      undefined, fromBlock, toBlock,
+      ["CrcV2_CirclesBackingInitiated"],
+      [{ Type: "FilterPredicate", FilterType: "Equals", Column: "emitter", Value: backingFactoryAddress }]
+    ]);
+    return unwrapEventsResult(response.result) as CrcV2_CirclesBackingInitiated[];
   }
 
   async fetchAllBaseGroups(pageSize: number = 1000): Promise<string[]> {

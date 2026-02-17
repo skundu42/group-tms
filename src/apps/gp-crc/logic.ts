@@ -401,6 +401,211 @@ export async function runOnce(
   };
 }
 
+async function fetchRegisterHumanEvents(
+  rpcUrl: string,
+  range: BlockRange,
+  logger: ILoggerService
+): Promise<RegisterHumanEvent[]> {
+  const payload = {
+    jsonrpc: "2.0",
+    id: `gp-crc-${range.from}-${range.to}`,
+    method: "circles_events",
+    params: [
+      null,
+      range.from,
+      range.to,
+      ["CrcV2_RegisterHuman"]
+    ]
+  };
+  for (let attempt = 1; attempt <= EVENT_FETCH_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await timedFetch(
+        rpcUrl,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        },
+        EVENT_FETCH_TIMEOUT_MS
+      );
+
+      if (!response.ok) {
+        const status = response.status;
+        const error = new Error(`Failed to fetch RegisterHuman events: HTTP ${status} ${response.statusText}`);
+        if (attempt < EVENT_FETCH_MAX_ATTEMPTS && isRetryableStatus(status)) {
+          logger.warn(`Fetch attempt ${attempt} for blocks [${range.from}, ${range.to}] failed with status ${status}. Retrying in ${EVENT_FETCH_RETRY_DELAY_MS} ms.`);
+          await wait(EVENT_FETCH_RETRY_DELAY_MS);
+          continue;
+        }
+        throw error;
+      }
+
+      const body = await response.json() as CirclesEventsResponse;
+      if (body.error) {
+        throw new Error(`RPC error ${body.error.code}: ${body.error.message}`);
+      }
+
+      // Handle both legacy flat array and new paginated {events:[...]} response
+      const rawEvents = Array.isArray(body.result)
+        ? body.result
+        : (body.result && typeof body.result === "object" && "events" in body.result)
+          ? (body.result as any).events
+          : [];
+      const parsedEvents: RegisterHumanEvent[] = [];
+      let missingAvatarCount = 0;
+      let missingBlockNumberCount = 0;
+
+      for (const raw of rawEvents) {
+        const parsed = parseRegisterHumanEvent(raw);
+        if (parsed.ok) {
+          parsedEvents.push(parsed.event);
+        } else if (parsed.reason === "missing_avatar") {
+          missingAvatarCount += 1;
+        } else {
+          missingBlockNumberCount += 1;
+        }
+      }
+
+      const skippedCount = missingAvatarCount + missingBlockNumberCount;
+      if (skippedCount > 0) {
+        const reasons: string[] = [];
+        if (missingBlockNumberCount > 0) {
+          reasons.push(`missing or invalid block number: ${missingBlockNumberCount}`);
+        }
+        if (missingAvatarCount > 0) {
+          reasons.push(`missing or invalid avatar address: ${missingAvatarCount}`);
+        }
+        logger.warn(`Skipped ${skippedCount} RegisterHuman events (${reasons.join(", ")}).`);
+      }
+
+      return parsedEvents;
+    } catch (error) {
+      const retryable = isRetryableFetchError(error);
+      if (attempt >= EVENT_FETCH_MAX_ATTEMPTS || !retryable) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+
+      logger.warn(`Fetch attempt ${attempt} for blocks [${range.from}, ${range.to}] failed (${formatErrorMessage(error)}). Retrying in ${EVENT_FETCH_RETRY_DELAY_MS} ms.`);
+      await wait(EVENT_FETCH_RETRY_DELAY_MS);
+    }
+  }
+
+  throw new Error("Failed to fetch RegisterHuman events after retries");
+}
+
+type ParseFailureReason = "missing_block_number" | "missing_avatar";
+
+type ParseRegisterHumanResult =
+  | {ok: true; event: RegisterHumanEvent}
+  | {ok: false; reason: ParseFailureReason};
+
+function parseRegisterHumanEvent(raw: unknown): ParseRegisterHumanResult {
+  if (typeof raw !== "object" || raw === null) {
+    return {ok: false, reason: "missing_block_number"};
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const blockNumber = extractBlockNumber(obj);
+  if (blockNumber === null) {
+    return {ok: false, reason: "missing_block_number"};
+  }
+
+  const avatar = extractAvatar(obj);
+  if (!avatar) {
+    return {ok: false, reason: "missing_avatar"};
+  }
+
+  const transactionHash = extractHash(obj);
+  return {
+    ok: true,
+    event: {
+      blockNumber,
+      avatar,
+      transactionHash
+    }
+  };
+}
+
+function extractBlockNumber(obj: Record<string, unknown>): number | null {
+  const sources: Record<string, unknown>[] = [obj];
+
+  const values = obj["values"];
+  if (values && typeof values === "object") {
+    sources.push(values as Record<string, unknown>);
+  }
+
+  for (const source of sources) {
+    const candidates = [
+      source["blockNumber"],
+      source["block_number"],
+      source["block"],
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return candidate;
+      }
+      if (typeof candidate === "string") {
+        const trimmed = candidate.trim();
+        if (trimmed.length === 0) {
+          continue;
+        }
+        const parsed = trimmed.startsWith("0x") || trimmed.startsWith("0X")
+          ? Number.parseInt(trimmed.slice(2), 16)
+          : Number.parseInt(trimmed, 10);
+        if (!Number.isNaN(parsed)) {
+          return parsed;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractAvatar(obj: Record<string, unknown>): string | null {
+  const values = obj["values"];
+  if (!values || typeof values !== "object") {
+    return null;
+  }
+
+  const avatar = (values as Record<string, unknown>)["avatar"];
+  if (typeof avatar !== "string") {
+    return null;
+  }
+
+  return normalizeAddress(avatar);
+}
+
+function extractHash(obj: Record<string, unknown>): string | undefined {
+  const sources: Record<string, unknown>[] = [obj];
+
+  const values = obj["values"];
+  if (values && typeof values === "object") {
+    sources.push(values as Record<string, unknown>);
+  }
+
+  for (const source of sources) {
+    const candidates = [
+      source["transactionHash"],
+      source["transaction_hash"],
+      source["txHash"],
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string") {
+        const trimmed = candidate.trim();
+        if (trimmed.length > 0) {
+          return trimmed;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
 
 function normalizeAddress(value: string): string | null {
   const trimmed = value.trim();
