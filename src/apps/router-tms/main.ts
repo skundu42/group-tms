@@ -72,7 +72,7 @@ void notifySlackStartup();
 process.on("SIGINT", async () => {
   try {
     await slackService.notifySlackStartOrCrash(
-      `🔄 **Router-TMS Service shutting down**\n\nService received SIGINT signal.`
+      `🔄 *Router-TMS Service shutting down*\n\nService received SIGINT signal.`
     );
   } catch (error) {
     rootLogger.error("Failed to send shutdown notification:", error);
@@ -83,7 +83,7 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   try {
     await slackService.notifySlackStartOrCrash(
-      `🔄 **Router-TMS Service shutting down**\n\nService received SIGTERM signal.`
+      `🔄 *Router-TMS Service shutting down*\n\nService received SIGTERM signal.`
     );
   } catch (error) {
     rootLogger.error("Failed to send shutdown notification:", error);
@@ -136,7 +136,7 @@ start().catch((cause) => {
   rootLogger.error("Router-TMS service crashed:");
   rootLogger.error(formatErrorWithCauses(error));
   void slackService.notifySlackStartOrCrash(
-    `🚨 **Router-TMS Service crashed**\n\nLast error: ${error.message}`
+    `🚨 *Router-TMS Service crashed*\n\nLast error: ${error.message}`
   ).catch((slackError: unknown) => {
     rootLogger.warn("Failed to send crash notification to Slack:", slackError);
   });
@@ -145,7 +145,7 @@ start().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const pollIntervalMinutes = formatMinutes(pollIntervalMs);
-  const message = `✅ **Router-TMS Service started**\n\n` +
+  const message = `✅ *Router-TMS Service started*\n\n` +
     `Enabling routing for every non-blacklisted human avatar.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Router: ${routerAddress}\n` +
@@ -169,7 +169,7 @@ async function notifySlackStartup(): Promise<void> {
 }
 
 async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ **Router-TMS run failed**\n\n${error.message}`;
+  const message = `⚠️ *Router-TMS run failed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {

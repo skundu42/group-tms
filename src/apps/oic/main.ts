@@ -58,7 +58,7 @@ function createDryRunGroupService(): IGroupService {
 
 process.on('SIGTERM', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **OIC Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *OIC Service Shutting Down*\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -67,7 +67,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **OIC Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *OIC Service Shutting Down*\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -94,7 +94,7 @@ process.on('unhandledRejection', async (reason: any) => {
 (async () => {
   try {
     validateConfig();
-    const startupMessage = `✅ **OIC Service Started**\n\n` +
+    const startupMessage = `✅ *OIC Service Started*\n\n` +
       `Service is now running and monitoring + reconciling trust.\n` +
       `- RPC: ${rpcUrl}\n` +
       `- Group: ${oicGroupAddress}\n` +
