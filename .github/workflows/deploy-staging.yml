@@ -1,0 +1,34 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'package*.json'
+      - 'tsconfig.json'
+  workflow_dispatch:
+
+jobs:
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Ansible deployment
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.ANSIBLE_REPO_PAT }}
+          repository: aboutcircles/aboutcircles-infrastructure
+          event-type: deploy-circles-smart
+          client-payload: |
+            {
+              "environment": "staging",
+              "image_tag": "dev",
+              "commit_sha": "${{ github.sha }}",
+              "triggered_by": "${{ github.actor }}",
+              "source_repo": "${{ github.repository }}",
+              "source_branch": "${{ github.ref_name }}",
+              "deploy": {
+                "group_tms": "true"
+              }
+            }
