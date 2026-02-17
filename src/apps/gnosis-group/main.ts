@@ -18,6 +18,7 @@ import {
   RunOutcome
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
@@ -121,6 +122,7 @@ process.on("unhandledRejection", async (reason) => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("gnosis-group");
   while (true) {
     const runStartedAt = Date.now();
     try {
@@ -136,12 +138,14 @@ async function mainLoop(): Promise<void> {
         config
       );
 
+      recordRunSuccess("gnosis-group", Date.now() - runStartedAt);
       rootLogger.info(
         `Run completed. Addresses with relative score > ${outcome.threshold}: ${outcome.aboveThresholdCount}`
       );
       await notifySlackRunSummary(outcome);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("gnosis-group");
       rootLogger.error("gnosis-group run failed:");
       rootLogger.error(formatErrorWithCauses(error));
       await notifySlackRunError(error);

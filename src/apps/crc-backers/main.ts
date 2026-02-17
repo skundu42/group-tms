@@ -7,6 +7,7 @@ import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
 import {runOnce} from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
@@ -99,6 +100,7 @@ function delay(ms: number): Promise<void> {
 
 async function loop() {
   while (errors.length < errorsBeforeCrash) {
+    const runStartedAt = Date.now();
     try {
       rootLogger.info("Checking for new backers...");
       await refreshBlacklist();
@@ -124,6 +126,7 @@ async function loop() {
         }
       );
       nextFromBlock = outcome.nextFromBlock;
+      recordRunSuccess("crc-backers", Date.now() - runStartedAt);
     } catch (caught: unknown) {
       const isError = caught instanceof Error;
       const baseError = isError ? caught : new Error(String(caught));
@@ -131,6 +134,7 @@ async function loop() {
       // Wrap so your callsite (this catch frame) appears in the printed stack.
       const wrapped = new Error("runOnce failed in loop()", {cause: baseError});
       errors.push(wrapped);
+      recordRunError("crc-backers");
 
       const errorIndex = errors.length;
       const thresholdReached = errorIndex >= errorsBeforeCrash;
@@ -176,6 +180,7 @@ async function refreshBlacklist(): Promise<void> {
 }
 
 async function main() {
+  startMetricsServer("crc-backers");
   await sendStartupNotification();
   await loop();
 }

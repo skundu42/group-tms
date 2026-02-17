@@ -6,6 +6,7 @@ import {AffiliateGroupEventsService} from "../../services/affiliateGroupEventsSe
 import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
 import {IGroupService} from "../../interfaces/IGroupService";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const oicGroupAddress = (process.env.OIC_GROUP_ADDRESS || "0x4E2564e5df6C1Fb10C1A018538de36E4D5844DE5").toLowerCase();
@@ -123,11 +124,13 @@ function delay(ms: number): Promise<void> {
 }
 
 async function loop() {
+  startMetricsServer("oic");
   const state: IncrementalState = createInitialIncrementalState();
   state.lastSafeHeadScanned = Math.max(0, deployedAtBlock - 1);
   // Only print startup/info logs once per process lifetime
   let printedStartupLogs = false;
   while (true) {
+    const runStartedAt = Date.now();
     try {
       const LOG = rootLogger.child("oic");
       if (!printedStartupLogs) {
@@ -155,7 +158,9 @@ async function loop() {
         },
         state,
       );
+      recordRunSuccess("oic", Date.now() - runStartedAt);
     } catch (err) {
+      recordRunError("oic");
       rootLogger.error("OIC runOnce failed:", err);
     }
 

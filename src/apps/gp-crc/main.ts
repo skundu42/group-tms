@@ -13,6 +13,7 @@ import {
   DEFAULT_GROUP_BATCH_SIZE
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gp-crc");
@@ -105,7 +106,9 @@ process.on("SIGTERM", async () => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("gp-crc");
   while (true) {
+    const runStartedAt = Date.now();
     try {
       await refreshBlacklist();
       const outcome = await runOnce(
@@ -119,8 +122,10 @@ async function mainLoop(): Promise<void> {
         },
         config
       );
+      recordRunSuccess("gp-crc", Date.now() - runStartedAt);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("gp-crc");
       rootLogger.error("runOnce failed:");
       rootLogger.error(formatErrorWithCauses(error));
       void notifySlackRunError(error);

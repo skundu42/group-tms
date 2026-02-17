@@ -11,6 +11,7 @@ import {
   DEFAULT_BASE_GROUP_ADDRESS
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 import {InMemoryRouterEnablementStore} from "./enablementStore";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
@@ -92,7 +93,9 @@ process.on("SIGTERM", async () => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("router-tms");
   while (true) {
+    const runStartedAt = Date.now();
     try {
       await refreshBlacklist();
       const outcome = await runOnce(
@@ -105,6 +108,7 @@ async function mainLoop(): Promise<void> {
         },
         config
       );
+      recordRunSuccess("router-tms", Date.now() - runStartedAt);
       runLogger.info(
         "router-tms run completed: " +
           `uniqueHumans=${outcome.uniqueHumanCount} ` +
@@ -118,6 +122,7 @@ async function mainLoop(): Promise<void> {
       }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("router-tms");
       rootLogger.error("router-tms run failed:");
       rootLogger.error(formatErrorWithCauses(error));
       void notifySlackRunError(error);
