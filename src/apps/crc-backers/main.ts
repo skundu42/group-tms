@@ -94,6 +94,7 @@ async function loop() {
   while (errors.length < errorsBeforeCrash) {
     try {
       rootLogger.info("Checking for new backers...");
+      await refreshBlacklist();
 
       const logger = rootLogger.child("process");
       const outcome = await runOnce(
@@ -155,20 +156,19 @@ async function loop() {
   }
 }
 
-async function initializeBlacklist(): Promise<void> {
+async function refreshBlacklist(): Promise<void> {
   try {
-    rootLogger.info("Loading blacklist from remote service...");
+    rootLogger.info("Refreshing blacklist from remote service...");
     await blacklistingService.loadBlacklist();
     const count = blacklistingService.getBlacklistCount();
-    rootLogger.info(`Blacklist loaded successfully. ${count} addresses blacklisted.`);
+    rootLogger.info(`Blacklist refreshed successfully. ${count} addresses blacklisted.`);
   } catch (error) {
-    rootLogger.error("Failed to load blacklist:", error);
+    rootLogger.error("Failed to refresh blacklist:", error);
     throw error;
   }
 }
 
 async function main() {
-  await initializeBlacklist();
   await sendStartupNotification();
   await loop();
 }
