@@ -9,24 +9,21 @@ const CIRCLES_HUB_INTERFACE = new Interface([
   "function isHuman(address account) view returns (bool)"
 ]);
 
+// TODO: Replace unwrapEventsResult + flattenRawEvent with @aboutcircles/sdk-rpc
+// QueryMethods.events() once sdk-v2 feature/new_rpc_methods is merged & published.
+// That branch has the correct signature (address, fromBlock, toBlock, eventTypes,
+// filterPredicates, ...) and returns typed PagedEventsResponse<T> directly.
+// See: https://github.com/aboutcircles/sdk-v2/tree/feature/new_rpc_methods
+
 /**
- * Extract the events array from a circles_events RPC response and normalise
- * each raw event into the flat SDK shape ({$event, backer, blockNumber, ...}
- * instead of {event, values: {backer, blockNumber, ...}}).
- *
- * Handles both the legacy flat array format and the new paginated
- * {events: [], hasMore, nextCursor} envelope.
+ * Extract events from a circles_events RPC paginated response
+ * and normalise raw events into the flat SDK shape.
  */
 function unwrapEventsResult(result: unknown): unknown[] {
-  let events: unknown[];
-  if (Array.isArray(result)) {
-    events = result;
-  } else if (result && typeof result === "object" && "events" in result) {
-    events = (result as { events: unknown[] }).events;
-  } else {
+  if (!result || typeof result !== "object" || !("events" in result)) {
     return [];
   }
-  return events.map(flattenRawEvent);
+  return (result as { events: unknown[] }).events.map(flattenRawEvent);
 }
 
 const NUMERIC_FIELDS = new Set(["blockNumber", "timestamp", "transactionIndex", "logIndex"]);
