@@ -2,12 +2,17 @@ import {ISlackService} from "../interfaces/ISlackService";
 import {CrcV2_CirclesBackingInitiated} from "@circles-sdk/data/dist/events/events";
 
 export class SlackService implements ISlackService {
+  private readonly tag: string;
+
   constructor(private webhookUrl: string) {
+    const env = process.env.ENVIRONMENT || "unknown";
+    const app = process.env.APP_NAME || "group-tms";
+    this.tag = `[${env} | ${app}]`;
   }
 
   async notifyBackingNotCompleted(e: CrcV2_CirclesBackingInitiated, reason: string): Promise<void> {
     const text =
-      `⚠️ Backing stuck. Reason: ${reason}.
+      `${this.tag} ⚠️ Backing stuck. Reason: ${reason}.
 - backer: ${e.backer}
 - instance: ${e.circlesBackingInstance}
 - tx: ${e.transactionHash}
@@ -27,9 +32,10 @@ export class SlackService implements ISlackService {
   }
 
   async notifySlackStartOrCrash(message: string): Promise<void> {
+    const tagged = `${this.tag} ${message}`;
     if (!this.webhookUrl) {
       const ts = new Date().toISOString();
-      console.warn(`[${ts}]`, `Slack notification (no webhook configured): ${message}`);
+      console.warn(`[${ts}]`, `Slack notification (no webhook configured): ${tagged}`);
       return;
     }
 
@@ -37,7 +43,7 @@ export class SlackService implements ISlackService {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        text: message
+        text: tagged
       })
     });
     if (!res.ok) {
