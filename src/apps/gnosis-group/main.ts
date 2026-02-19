@@ -18,6 +18,7 @@ import {
   RunOutcome
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
@@ -121,6 +122,7 @@ process.on("unhandledRejection", async (reason) => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("gnosis-group");
   while (true) {
     const runStartedAt = Date.now();
     try {
@@ -136,12 +138,14 @@ async function mainLoop(): Promise<void> {
         config
       );
 
+      recordRunSuccess("gnosis-group", Date.now() - runStartedAt);
       rootLogger.info(
         `Run completed. Addresses with relative score > ${outcome.threshold}: ${outcome.aboveThresholdCount}`
       );
       await notifySlackRunSummary(outcome);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("gnosis-group");
       rootLogger.error("gnosis-group run failed:");
       rootLogger.error(formatErrorWithCauses(error));
       await notifySlackRunError(error);
@@ -220,8 +224,8 @@ start().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const header = dryRun
-    ? "🧪 **Gnosis Group Service Started (dry-run)**"
-    : "✅ **Gnosis Group Service Started**";
+    ? "🧪 *Gnosis Group Service Started (dry-run)*"
+    : "✅ *Gnosis Group Service Started*";
   const message =
     `${header}\n\n` +
     `- RPC: ${rpcUrl}\n` +
@@ -245,7 +249,7 @@ async function notifySlackStartup(): Promise<void> {
 
 async function notifySlackShutdown(signal: NodeJS.Signals): Promise<void> {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Gnosis Group Service shutting down**\n\nReceived ${signal}.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *Gnosis Group Service shutting down*\n\nReceived ${signal}.`);
   } catch (error) {
     rootLogger.warn("Failed to send Slack shutdown notification:", error);
   }
@@ -260,8 +264,8 @@ async function notifySlackRunSummary(outcome: RunOutcome): Promise<void> {
   }
 
   const header = dryRun
-    ? "🧪 **Gnosis Group Dry-Run Summary**"
-    : "✅ **Gnosis Group Run Summary**";
+    ? "🧪 *Gnosis Group Dry-Run Summary*"
+    : "✅ *Gnosis Group Run Summary*";
 
   const lines: string[] = [
     header,
@@ -306,7 +310,7 @@ async function notifySlackRunSummary(outcome: RunOutcome): Promise<void> {
 }
 
 async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ **Gnosis Group run failed**\n\n${error.message}`;
+  const message = `⚠️ *Gnosis Group run failed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
     if (slackConfigured) {
@@ -318,7 +322,7 @@ async function notifySlackRunError(error: Error): Promise<void> {
 }
 
 async function notifySlackFatal(error: Error): Promise<void> {
-  const message = `🚨 **Gnosis Group Service crashed**\n\n${error.message}`;
+  const message = `🚨 *Gnosis Group Service crashed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {

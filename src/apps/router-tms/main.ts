@@ -11,6 +11,7 @@ import {
   DEFAULT_BASE_GROUP_ADDRESS
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 import {InMemoryRouterEnablementStore} from "./enablementStore";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
@@ -72,7 +73,7 @@ void notifySlackStartup();
 process.on("SIGINT", async () => {
   try {
     await slackService.notifySlackStartOrCrash(
-      `🔄 **Router-TMS Service shutting down**\n\nService received SIGINT signal.`
+      `🔄 *Router-TMS Service shutting down*\n\nService received SIGINT signal.`
     );
   } catch (error) {
     rootLogger.error("Failed to send shutdown notification:", error);
@@ -83,7 +84,7 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   try {
     await slackService.notifySlackStartOrCrash(
-      `🔄 **Router-TMS Service shutting down**\n\nService received SIGTERM signal.`
+      `🔄 *Router-TMS Service shutting down*\n\nService received SIGTERM signal.`
     );
   } catch (error) {
     rootLogger.error("Failed to send shutdown notification:", error);
@@ -92,7 +93,9 @@ process.on("SIGTERM", async () => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("router-tms");
   while (true) {
+    const runStartedAt = Date.now();
     try {
       await refreshBlacklist();
       const outcome = await runOnce(
@@ -105,6 +108,7 @@ async function mainLoop(): Promise<void> {
         },
         config
       );
+      recordRunSuccess("router-tms", Date.now() - runStartedAt);
       runLogger.info(
         "router-tms run completed: " +
           `uniqueHumans=${outcome.uniqueHumanCount} ` +
@@ -118,6 +122,7 @@ async function mainLoop(): Promise<void> {
       }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("router-tms");
       rootLogger.error("router-tms run failed:");
       rootLogger.error(formatErrorWithCauses(error));
       void notifySlackRunError(error);
@@ -136,7 +141,7 @@ start().catch((cause) => {
   rootLogger.error("Router-TMS service crashed:");
   rootLogger.error(formatErrorWithCauses(error));
   void slackService.notifySlackStartOrCrash(
-    `🚨 **Router-TMS Service crashed**\n\nLast error: ${error.message}`
+    `🚨 *Router-TMS Service crashed*\n\nLast error: ${error.message}`
   ).catch((slackError: unknown) => {
     rootLogger.warn("Failed to send crash notification to Slack:", slackError);
   });
@@ -145,7 +150,7 @@ start().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const pollIntervalMinutes = formatMinutes(pollIntervalMs);
-  const message = `✅ **Router-TMS Service started**\n\n` +
+  const message = `✅ *Router-TMS Service started*\n\n` +
     `Enabling routing for every non-blacklisted human avatar.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Router: ${routerAddress}\n` +
@@ -169,7 +174,7 @@ async function notifySlackStartup(): Promise<void> {
 }
 
 async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ **Router-TMS run failed**\n\n${error.message}`;
+  const message = `⚠️ *Router-TMS run failed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {

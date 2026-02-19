@@ -13,6 +13,7 @@ import {
   DEFAULT_GROUP_BATCH_SIZE
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gp-crc");
@@ -88,7 +89,7 @@ void notifySlackStartup();
 
 process.on("SIGINT", async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **GP-CRC TMS Service shutting down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *GP-CRC TMS Service shutting down*\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -97,7 +98,7 @@ process.on("SIGINT", async () => {
 
 process.on("SIGTERM", async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **GP-CRC TMS Service shutting down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *GP-CRC TMS Service shutting down*\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -105,7 +106,9 @@ process.on("SIGTERM", async () => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("gp-crc");
   while (true) {
+    const runStartedAt = Date.now();
     try {
       await refreshBlacklist();
       const outcome = await runOnce(
@@ -119,8 +122,10 @@ async function mainLoop(): Promise<void> {
         },
         config
       );
+      recordRunSuccess("gp-crc", Date.now() - runStartedAt);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("gp-crc");
       rootLogger.error("runOnce failed:");
       rootLogger.error(formatErrorWithCauses(error));
       void notifySlackRunError(error);
@@ -170,7 +175,7 @@ start().catch((cause) => {
   rootLogger.error("GP-CRC TMS Service encountered an unrecoverable error:");
   rootLogger.error(formatErrorWithCauses(error));
   void slackService.notifySlackStartOrCrash(
-    `🚨 **GP-CRC TMS Service crashed**\n\nLast error: ${error.message}`
+    `🚨 *GP-CRC TMS Service crashed*\n\nLast error: ${error.message}`
   ).catch((slackError: unknown) => {
     rootLogger.warn("Failed to send crash notification to Slack:", slackError);
   });
@@ -179,7 +184,7 @@ start().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const pollIntervalMinutes = formatMinutes(pollIntervalMs);
-    const startupMessage = `✅ **GP-CRC TMS Service started**\n\n` +
+    const startupMessage = `✅ *GP-CRC TMS Service started*\n\n` +
     `Monitoring CRC avatars who also have a GP account in Metri.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Blacklisting Service: ${blacklistingServiceUrl}\n` +
@@ -205,7 +210,7 @@ async function notifySlackStartup(): Promise<void> {
 
 
 async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ **GP-CRC TMS Service runOnce error**\n\n${error.message}`;
+  const message = `⚠️ *GP-CRC TMS Service runOnce error*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {
