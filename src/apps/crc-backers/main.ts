@@ -7,9 +7,10 @@ import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
 import {runOnce} from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
-const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
 const backersGroupAddress = process.env.BACKERS_GROUP_ADDRESS || "0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026";
 const backingFactoryAddress = process.env.BACKING_FACTORY_ADDRESS || "0xeced91232c609a42f6016860e8223b8aecaa7bd0";
 const deployedAtBlock = Number.parseInt(process.env.START_AT_BLOCK || "39743285");
@@ -42,13 +43,20 @@ const chainRpc = new ChainRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const slackService = new SlackService(slackWebhookUrl);
 const groupService = dryRun ? undefined : new SafeGroupService(rpcUrl, safeSignerPrivateKey, safeAddress);
-const cowSwapService = new BackingInstanceService(rpcUrl, safeSignerPrivateKey, safeAddress);
+// In dry-run mode, skip passing signer keys so BackingInstanceService doesn't
+// eagerly initialise Safe Protocol Kit (which calls eth_chainId via viem).
+// simulate* methods only use the ethers provider; execute methods throw if needed.
+const cowSwapService = new BackingInstanceService(
+  rpcUrl,
+  dryRun ? undefined : safeSignerPrivateKey,
+  dryRun ? undefined : safeAddress
+);
 // Track the next block to scan purely in memory between loop iterations.
 let nextFromBlock = deployedAtBlock;
 
 process.on('SIGTERM', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *Backers Group TMS Service Shutting Down*\n\nService received SIGTERM signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -57,7 +65,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Circles Group TMS Service Shutting Down**\n\nService received SIGINT signal. Graceful shutdown initiated.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *Backers Group TMS Service Shutting Down*\n\nService received SIGINT signal. Graceful shutdown initiated.`);
   } catch (error) {
     rootLogger.error('Failed to send shutdown notification:', error);
   }
@@ -65,7 +73,7 @@ process.on('SIGINT', async () => {
 });
 
 async function sendStartupNotification(): Promise<void> {
-  const startupMessage = `✅ **Circles Group TMS Service Started**\n\n` +
+  const startupMessage = `✅ *Backers Group TMS Service Started*\n\n` +
     `Service is now running and monitoring for new backers.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Group: ${backersGroupAddress}\n` +
@@ -92,8 +100,10 @@ function delay(ms: number): Promise<void> {
 
 async function loop() {
   while (errors.length < errorsBeforeCrash) {
+    const runStartedAt = Date.now();
     try {
       rootLogger.info("Checking for new backers...");
+      await refreshBlacklist();
 
       const logger = rootLogger.child("process");
       const outcome = await runOnce(
@@ -116,6 +126,7 @@ async function loop() {
         }
       );
       nextFromBlock = outcome.nextFromBlock;
+      recordRunSuccess("crc-backers", Date.now() - runStartedAt);
     } catch (caught: unknown) {
       const isError = caught instanceof Error;
       const baseError = isError ? caught : new Error(String(caught));
@@ -123,6 +134,7 @@ async function loop() {
       // Wrap so your callsite (this catch frame) appears in the printed stack.
       const wrapped = new Error("runOnce failed in loop()", {cause: baseError});
       errors.push(wrapped);
+      recordRunError("crc-backers");
 
       const errorIndex = errors.length;
       const thresholdReached = errorIndex >= errorsBeforeCrash;
@@ -135,7 +147,7 @@ async function loop() {
         
         // Send Slack notification before crashing
         try {
-          const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+          const crashMessage = `🚨 *Backers Group TMS Service is CRASHING*\n\n` +
             `Error threshold reached (${errorIndex}/${errorsBeforeCrash}).\n` +
             `Last error: ${baseError.message}\n\n` +
             `Service will exit with code 1. Please investigate and restart.`;
@@ -155,7 +167,20 @@ async function loop() {
   }
 }
 
+async function refreshBlacklist(): Promise<void> {
+  try {
+    rootLogger.info("Refreshing blacklist from remote service...");
+    await blacklistingService.loadBlacklist();
+    const count = blacklistingService.getBlacklistCount();
+    rootLogger.info(`Blacklist refreshed successfully. ${count} addresses blacklisted.`);
+  } catch (error) {
+    rootLogger.error("Failed to refresh blacklist:", error);
+    throw error;
+  }
+}
+
 async function main() {
+  startMetricsServer("crc-backers");
   await sendStartupNotification();
   await loop();
 }
@@ -166,7 +191,7 @@ main().catch(async (err) => {
   rootLogger.error(formatErrorWithCauses(asError));
 
   try {
-    const crashMessage = `🚨 **Circles Group TMS Service is CRASHING**\n\n` +
+    const crashMessage = `🚨 *Backers Group TMS Service is CRASHING*\n\n` +
       `Fatal error in main(): ${asError.message}\n\n` +
       `Service will exit with code 1. Please investigate and restart.`;
     await slackService.notifySlackStartOrCrash(crashMessage);

@@ -1,10 +1,17 @@
+export type AvatarSafeResult = {
+  /** Clean 1:1 avatar → safe mappings (no conflicts). */
+  mappings: Map<string, string>;
+  /** Safes that have multiple avatar claimants: safe → avatars[]. */
+  safeConflicts: Map<string, string[]>;
+};
+
 export interface IAvatarSafeService {
   /**
-   * Returns a map of avatars that have a configured safe address.
-   * The key is the normalized avatar address (lowercase checksum),
-   * and the value is the normalized safe address. Avatars linked to more
-   * than one safe module are omitted. Safes linked to more than one avatar
-   * are omitted.
+   * Returns avatar → safe mappings together with conflict information.
+   *
+   * Clean 1:1 pairs go into `mappings`. Avatars linked to more than one
+   * safe module are omitted from `mappings`. Safes linked to more than
+   * one avatar are omitted from `mappings` and reported in `safeConflicts`.
    */
-  findAvatarsWithSafes(avatars: string[]): Promise<Map<string, string>>;
+  findAvatarsWithSafes(avatars: string[]): Promise<AvatarSafeResult>;
 }

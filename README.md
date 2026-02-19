@@ -1,6 +1,6 @@
 # Circles Group Trust Management Service
 
-Three specialized services for Circles protocol trust management:
+Specialized services for Circles protocol trust management:
 
 ## CRC Backers App
 * Scans Circles **BackingCompleted**/**BackingInitiated** events
@@ -17,6 +17,13 @@ Three specialized services for Circles protocol trust management:
 * Trusts eligible avatars into the configured group in batches (default 10)
 * Supports dry-run mode and Slack notifications
 * Runs every 10 minutes
+
+## Dublin TMS App
+* Scans on-chain **RegisterHuman** logs from the configured contract
+* Filters events where `originInviter` is one of a configured allowlist
+* Trusts the matching `human` avatars into a configured group
+* Supports chunked block scanning, dry-run mode, and Slack notifications
+* Runs continuously with configurable poll interval
 
 ## OIC App  
 * Monitors affiliate group changes and trust relationships
@@ -50,6 +57,7 @@ npx tsc && node --env-file=.env dist/src/main.js
 # Option B: use scripts (also load .env)
 npm run start:crc-backers
 npm run start:gp-crc
+npm run start:dublin-tms
 npm run start:oic
 npm run start:all
 ```
@@ -144,6 +152,38 @@ SLACK_WEBHOOK_URL=
 VERBOSE_LOGGING=1     # any truthy value enables debug/table
 ```
 
+### Dublin TMS App Configuration
+
+```dotenv
+# RPC
+RPC_URL=https://rpc.aboutcircles.com/
+
+# RegisterHuman source + target group
+DUBLIN_TMS_ADDRESS=0xAeCda439CC8Ac2a2da32bE871E0C2D7155350f80
+
+# Scan window / timing
+DUBLIN_TMS_START_BLOCK=44560106
+DUBLIN_TMS_TO_BLOCK=             # optional; if unset follows head-confirmations
+DUBLIN_TMS_CHUNK_SIZE=2000
+DUBLIN_TMS_CONFIRMATION_BLOCKS=2
+DUBLIN_TMS_POLL_INTERVAL_MS=600000
+DUBLIN_TMS_BATCH_SIZE=50
+
+# EOA execution (required unless dry run)
+DUBLIN_TMS_SERVICE_EOA=0x20a3C619De4C15E360d30F329DBCfe5bb618654f
+DUBLIN_TMS_SERVICE_PRIVATE_KEY=
+
+# Operation mode
+DRY_RUN=0
+
+# Notifications
+DUBLIN_TMS_SLACK_WEBHOOK_URL=    # optional override; falls back to SLACK_WEBHOOK_URL
+SLACK_WEBHOOK_URL=
+
+# Logging
+VERBOSE_LOGGING=1
+```
+
 ### Router TMS Configuration
 
 ```dotenv
@@ -231,6 +271,14 @@ VERBOSE_LOGGING=1
 * Can run in dry-run mode for testing without making transactions
 * Configurable refresh intervals and batch sizes
 
+### Dublin TMS App
+
+* Walks block ranges from `DUBLIN_TMS_START_BLOCK` to `head - DUBLIN_TMS_CONFIRMATION_BLOCKS` (or `DUBLIN_TMS_TO_BLOCK` when set)
+* Fetches `RegisterHuman(human, originInviter, proxyInviter)` logs from the fixed invitation module `0x00738aca013B7B2e6cfE1690F0021C3182Fa40B5`
+* Filters to events where `originInviter` is in the fixed Dublin inviter allowlist
+* Deduplicates `human` addresses, skips already-trusted avatars in `DUBLIN_TMS_ADDRESS`, and trusts remaining avatars in batches
+* Supports dry-run logging and startup/shutdown/run-error Slack notifications
+
 ## Operational notes
 
 ### General
@@ -255,6 +303,12 @@ VERBOSE_LOGGING=1
 * `OIC_META_ORG_ADDRESS` is required - this is the MetaOrg whose trustees will be monitored
 * Use `DRY_RUN=1` for testing without making actual blockchain transactions
 * Service maintains incremental state to avoid re-processing old events
+
+### Dublin TMS App
+* `DUBLIN_TMS_SERVICE_EOA` should be the group service EOA (defaults to `0x20a3C619De4C15E360d30F329DBCfe5bb618654f`)
+* `DUBLIN_TMS_SERVICE_PRIVATE_KEY` must match `DUBLIN_TMS_SERVICE_EOA` when `DRY_RUN=0`
+* Set `DUBLIN_TMS_TO_BLOCK` to run a bounded historical backfill
+* If `DUBLIN_TMS_TO_BLOCK` is unset, the app follows the chain head with the configured confirmation buffer
 
 ### Gnosis Group App
 * Fetches registered human avatars and filters out blacklisted addresses

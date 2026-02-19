@@ -24,6 +24,20 @@ module.exports = {
   coverageReporters: ["text", "lcov", "html"],
 
   transform: {
-    "^.+\\.tsx?$": ["ts-jest", {tsconfig: "<rootDir>/tsconfig.json"}]
-  }
+    "^.+\\.(t|j)sx?$": [
+      "ts-jest",
+      {
+        tsconfig: (() => {
+          const base = require("./tsconfig.json");
+          return {
+            ...base.compilerOptions,
+            // Allow ts-jest to transpile ESM-only deps under node_modules.
+            allowJs: true
+          };
+        })()
+      }
+    ]
+  },
+  // Transpile ESM-only @circles-sdk packages so CommonJS Jest can execute them.
+  transformIgnorePatterns: ["/node_modules/(?!@circles-sdk/)"]
 };

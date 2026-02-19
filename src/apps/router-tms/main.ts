@@ -8,10 +8,10 @@ import {
   RunConfig,
   DEFAULT_ENABLE_BATCH_SIZE,
   DEFAULT_FETCH_PAGE_SIZE,
-  DEFAULT_BLACKLIST_CHUNK_SIZE,
   DEFAULT_BASE_GROUP_ADDRESS
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 import {InMemoryRouterEnablementStore} from "./enablementStore";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
@@ -22,11 +22,10 @@ const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const pollIntervalMs = parseEnvInt("ROUTER_POLL_INTERVAL_MS", 30 * 60 * 1000);
 const enableBatchSize = parseEnvInt("ROUTER_ENABLE_BATCH_SIZE", DEFAULT_ENABLE_BATCH_SIZE);
 const fetchPageSize = parseEnvInt("ROUTER_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
-const blacklistChunkSize = parseEnvInt("ROUTER_BLACKLIST_CHUNK_SIZE", DEFAULT_BLACKLIST_CHUNK_SIZE);
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const safeAddress = process.env.ROUTER_SAFE_ADDRESS || "";
 const safeSignerPrivateKey = process.env.ROUTER_SAFE_SIGNER_PRIVATE_KEY || "";
-const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
 
 const rootLogger = new LoggerService(verboseLogging, "router-tms");
 const slackService = new SlackService(slackWebhookUrl);
@@ -34,6 +33,18 @@ const slackConfigured = slackWebhookUrl.trim().length > 0;
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const enablementStore = new InMemoryRouterEnablementStore();
+
+async function refreshBlacklist(): Promise<void> {
+  try {
+    runLogger.info("Refreshing blacklist from remote service...");
+    await blacklistingService.loadBlacklist();
+    const count = blacklistingService.getBlacklistCount();
+    runLogger.info(`Blacklist refreshed successfully. ${count} addresses blacklisted.`);
+  } catch (error) {
+    runLogger.error("Failed to refresh blacklist:", error);
+    throw error;
+  }
+}
 
 let routerService: RouterService | undefined;
 if (!dryRun) {
@@ -52,8 +63,7 @@ const config: RunConfig = {
   baseGroupAddress,
   dryRun,
   enableBatchSize,
-  fetchPageSize,
-  blacklistChunkSize
+  fetchPageSize
 };
 
 const runLogger = rootLogger.child("run");
@@ -63,7 +73,7 @@ void notifySlackStartup();
 process.on("SIGINT", async () => {
   try {
     await slackService.notifySlackStartOrCrash(
-      `🔄 **Router-TMS Service shutting down**\n\nService received SIGINT signal.`
+      `🔄 *Router-TMS Service shutting down*\n\nService received SIGINT signal.`
     );
   } catch (error) {
     rootLogger.error("Failed to send shutdown notification:", error);
@@ -74,7 +84,7 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   try {
     await slackService.notifySlackStartOrCrash(
-      `🔄 **Router-TMS Service shutting down**\n\nService received SIGTERM signal.`
+      `🔄 *Router-TMS Service shutting down*\n\nService received SIGTERM signal.`
     );
   } catch (error) {
     rootLogger.error("Failed to send shutdown notification:", error);
@@ -83,8 +93,11 @@ process.on("SIGTERM", async () => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("router-tms");
   while (true) {
+    const runStartedAt = Date.now();
     try {
+      await refreshBlacklist();
       const outcome = await runOnce(
         {
           circlesRpc,
@@ -95,6 +108,7 @@ async function mainLoop(): Promise<void> {
         },
         config
       );
+      recordRunSuccess("router-tms", Date.now() - runStartedAt);
       runLogger.info(
         "router-tms run completed: " +
           `uniqueHumans=${outcome.uniqueHumanCount} ` +
@@ -108,6 +122,7 @@ async function mainLoop(): Promise<void> {
       }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("router-tms");
       rootLogger.error("router-tms run failed:");
       rootLogger.error(formatErrorWithCauses(error));
       void notifySlackRunError(error);
@@ -117,12 +132,16 @@ async function mainLoop(): Promise<void> {
   }
 }
 
-mainLoop().catch((cause) => {
+async function start(): Promise<void> {
+  await mainLoop();
+}
+
+start().catch((cause) => {
   const error = cause instanceof Error ? cause : new Error(String(cause));
-  rootLogger.error("Router-TMS main loop crashed:");
+  rootLogger.error("Router-TMS service crashed:");
   rootLogger.error(formatErrorWithCauses(error));
   void slackService.notifySlackStartOrCrash(
-    `🚨 **Router-TMS Service crashed**\n\nLast error: ${error.message}`
+    `🚨 *Router-TMS Service crashed*\n\nLast error: ${error.message}`
   ).catch((slackError: unknown) => {
     rootLogger.warn("Failed to send crash notification to Slack:", slackError);
   });
@@ -131,7 +150,7 @@ mainLoop().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const pollIntervalMinutes = formatMinutes(pollIntervalMs);
-  const message = `✅ **Router-TMS Service started**\n\n` +
+  const message = `✅ *Router-TMS Service started*\n\n` +
     `Enabling routing for every non-blacklisted human avatar.\n` +
     `- RPC: ${rpcUrl}\n` +
     `- Router: ${routerAddress}\n` +
@@ -155,7 +174,7 @@ async function notifySlackStartup(): Promise<void> {
 }
 
 async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ **Router-TMS run failed**\n\n${error.message}`;
+  const message = `⚠️ *Router-TMS run failed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {

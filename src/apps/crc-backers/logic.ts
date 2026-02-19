@@ -328,8 +328,8 @@ async function notifySlackTrustSummary(
   }
 
   const header = dryRun
-    ? "🧪 **CRC Backers Dry-Run Summary**"
-    : "✅ **CRC Backers Run Summary**";
+    ? "🧪 *CRC Backers Dry-Run Summary*"
+    : "✅ *CRC Backers Run Summary*";
 
   const lines: string[] = [
     header,

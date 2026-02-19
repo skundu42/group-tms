@@ -20,7 +20,6 @@ export type RunConfig = {
   dryRun?: boolean;
   enableBatchSize?: number;
   fetchPageSize?: number;
-  blacklistChunkSize?: number;
 };
 
 export type Deps = {
@@ -47,7 +46,6 @@ type EnableTarget = {baseGroup: string; addresses: string[]; source?: "base-grou
 
 export const DEFAULT_ENABLE_BATCH_SIZE = 10;
 export const DEFAULT_FETCH_PAGE_SIZE = 1_000;
-export const DEFAULT_BLACKLIST_CHUNK_SIZE = 500;
 export const DEFAULT_BASE_GROUP_ADDRESS = "0x1ACA75e38263c79d9D4F10dF0635cc6FCfe6F026";
 const HUMANITY_CHECK_BATCH_SIZE = 50;
 
@@ -71,7 +69,6 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
 
   const enableBatchSize = Math.max(1, cfg.enableBatchSize ?? DEFAULT_ENABLE_BATCH_SIZE);
   const fetchPageSize = Math.max(1, cfg.fetchPageSize ?? DEFAULT_FETCH_PAGE_SIZE);
-  const blacklistChunkSize = Math.max(1, cfg.blacklistChunkSize ?? DEFAULT_BLACKLIST_CHUNK_SIZE);
   const isHuman = createIsHumanChecker(circlesRpc);
 
   await assertBaseGroupIsGroupAvatar(baseGroupAddress, isHuman, logger);
@@ -86,7 +83,6 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
   const {allowed: allowedHumanAvatars, blacklisted: blacklistedHumanAvatars} = await partitionBlacklistedAddresses(
     blacklistingService,
     uniqueHumanAvatars,
-    blacklistChunkSize,
     logger
   );
   logger.info(
@@ -119,7 +115,6 @@ export async function runOnce(deps: Deps, cfg: RunConfig): Promise<RunOutcome> {
     const {allowed, blacklisted} = await partitionBlacklistedAddresses(
       blacklistingService,
       unknownBaseGroupAvatars,
-      blacklistChunkSize,
       logger
     );
     allowed.forEach((address) => allowedBaseGroupAvatars.add(address));
@@ -270,34 +265,30 @@ async function fetchAllHumanAvatars(
 async function partitionBlacklistedAddresses(
   service: IBlacklistingService,
   addresses: string[],
-  chunkSize: number,
   logger: ILoggerService
 ): Promise<{allowed: string[]; blacklisted: string[]}> {
   const allowed: string[] = [];
   const blacklisted: string[] = [];
 
-  for (let i = 0; i < addresses.length; i += chunkSize) {
-    const chunk = addresses.slice(i, i + chunkSize);
-    const verdicts = await service.checkBlacklist(chunk);
-    const verdictMap = new Map<string, IBlacklistServiceVerdict>();
+  const verdicts = await service.checkBlacklist(addresses);
+  const verdictMap = new Map<string, IBlacklistServiceVerdict>();
 
-    for (const verdict of verdicts) {
-      verdictMap.set(verdict.address.toLowerCase(), verdict);
+  for (const verdict of verdicts) {
+    verdictMap.set(verdict.address.toLowerCase(), verdict);
+  }
+
+  for (const address of addresses) {
+    const verdict = verdictMap.get(address.toLowerCase());
+    if (!verdict) {
+      logger.warn(`No blacklist verdict returned for ${address}; treating as allowed.`);
+      allowed.push(address);
+      continue;
     }
 
-    for (const address of chunk) {
-      const verdict = verdictMap.get(address.toLowerCase());
-      if (!verdict) {
-        logger.warn(`No blacklist verdict returned for ${address}; treating as allowed.`);
-        allowed.push(address);
-        continue;
-      }
-
-      if (isBlacklisted(verdict)) {
-        blacklisted.push(address);
-      } else {
-        allowed.push(address);
-      }
+    if (isBlacklisted(verdict)) {
+      blacklisted.push(address);
+    } else {
+      allowed.push(address);
     }
   }
 

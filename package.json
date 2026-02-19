@@ -11,6 +11,7 @@
     "start:crc-backers": "node --env-file=.env dist/src/apps/crc-backers/main.js",
     "start:gp-crc": "node --env-file=.env dist/src/apps/gp-crc/main.js",
     "start:gnosis-group": "node --env-file=.env dist/src/apps/gnosis-group/main.js",
+    "start:dublin-tms": "node --env-file=.env dist/src/apps/dublin-tms/main.js",
     "start:oic": "node --env-file=.env dist/src/apps/oic/main.js",
     "start:router-tms": "node --env-file=.env dist/src/apps/router-tms/main.js",
     "start:all": "node --env-file=.env dist/src/apps/manager.js",
@@ -21,7 +22,8 @@
     "@circles-sdk/data": "^0.29.1",
     "@safe-global/protocol-kit": "^6.1.2",
     "ethers": "^6.15.0",
-    "multihashes": "^4.0.3"
+    "multihashes": "^4.0.3",
+    "prom-client": "^15.1.3"
   },
   "devDependencies": {
     "@types/jest": "^29.4.1",

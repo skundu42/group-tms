@@ -75,7 +75,6 @@ function makeConfig(overrides?: Partial<RunConfig>): RunConfig {
     dryRun: true,
     enableBatchSize: 25,
     fetchPageSize: 50,
-    blacklistChunkSize: 50,
     ...overrides
   };
 }
@@ -123,7 +122,6 @@ describe("router-tms runOnce", () => {
       dryRun: false,
       enableBatchSize: 2,
       fetchPageSize: 2,
-      blacklistChunkSize: 2,
       baseGroupAddress: baseGroup
     });
 

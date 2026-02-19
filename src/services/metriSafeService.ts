@@ -1,5 +1,5 @@
 import {getAddress} from "ethers";
-import {IAvatarSafeService} from "../interfaces/IAvatarSafeService";
+import {type AvatarSafeResult, IAvatarSafeService} from "../interfaces/IAvatarSafeService";
 
 type DelayModuleOwner = {
   ownerAddress?: string | null;
@@ -41,10 +41,10 @@ export class MetriSafeService implements IAvatarSafeService {
     }
   }
 
-  async findAvatarsWithSafes(avatars: string[]): Promise<Map<string, string>> {
+  async findAvatarsWithSafes(avatars: string[]): Promise<AvatarSafeResult> {
     const normalized = normalizeAddresses(avatars);
     if (normalized.length === 0) {
-      return new Map();
+      return {mappings: new Map(), safeConflicts: new Map()};
     }
 
     const requested = new Set(normalized);
@@ -71,16 +71,18 @@ export class MetriSafeService implements IAvatarSafeService {
       }
     }
 
-    for (const avatarsForSafe of avatarsBySafe.values()) {
+    const safeConflicts = new Map<string, string[]>();
+    for (const [safe, avatarsForSafe] of avatarsBySafe.entries()) {
       if (avatarsForSafe.length < 2) {
         continue;
       }
+      safeConflicts.set(safe, avatarsForSafe);
       for (const avatar of avatarsForSafe) {
         result.delete(avatar);
       }
     }
 
-    return result;
+    return {mappings: result, safeConflicts};
   }
 
   private async fetchModules(addresses: string[]): Promise<DelayModule[]> {

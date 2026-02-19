@@ -7,22 +7,24 @@ import {SlackService} from "../../services/slackService";
 import {
   runOnce,
   RunConfig,
+  ScoreCache,
   DEFAULT_FETCH_PAGE_SIZE,
-  DEFAULT_BLACKLIST_CHUNK_SIZE,
   DEFAULT_SCORE_BATCH_SIZE,
   DEFAULT_SCORE_THRESHOLD,
   DEFAULT_GROUP_BATCH_SIZE,
   DEFAULT_BACKERS_GROUP_ADDRESS,
   DEFAULT_AUTO_TRUST_GROUP_ADDRESSES,
+  DEFAULT_SCORE_CACHE_TTL_MS,
   RunOutcome
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
+import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
-const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/classify";
+const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
 const scoringServiceUrl = process.env.GNOSIS_GROUP_SCORING_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/scoring/relative_trustscore/batch";
 const targetGroupAddress = process.env.GNOSIS_GROUP_ADDRESS || "0xC19BC204eb1c1D5B3FE500E5E5dfaBaB625F286c";
 const backersGroupAddress = process.env.GNOSIS_GROUP_BACKERS_GROUP_ADDRESS || DEFAULT_BACKERS_GROUP_ADDRESS;
@@ -38,15 +40,16 @@ if (!targetGroupAddress) {
 }
 
 const fetchPageSize = parseEnvInt("GNOSIS_GROUP_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
-const blacklistChunkSize = parseEnvInt("GNOSIS_GROUP_BLACKLIST_CHUNK_SIZE", DEFAULT_BLACKLIST_CHUNK_SIZE);
 const scoreBatchSize = parseEnvInt("GNOSIS_GROUP_SCORE_BATCH_SIZE", DEFAULT_SCORE_BATCH_SIZE);
 const scoreThreshold = parseEnvNumber("GNOSIS_GROUP_SCORE_THRESHOLD", DEFAULT_SCORE_THRESHOLD);
 const groupBatchSize = parseEnvInt("GNOSIS_GROUP_BATCH_SIZE", DEFAULT_GROUP_BATCH_SIZE);
+const scoreCacheTtlMs = parseEnvInt("GNOSIS_GROUP_SCORE_CACHE_TTL_MINUTES", DEFAULT_SCORE_CACHE_TTL_MS / 60_000) * 60_000;
 
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
+const scoreCache = new ScoreCache();
 
 const runLogger = rootLogger.child("run");
 let groupService: IGroupService | undefined;
@@ -69,10 +72,10 @@ const config: RunConfig = {
   targetGroupAddress,
   backersGroupAddress,
   fetchPageSize,
-  blacklistChunkSize,
   scoreBatchSize,
   scoreThreshold,
   groupBatchSize,
+  scoreCacheTtlMs,
   dryRun
 };
 
@@ -82,7 +85,6 @@ rootLogger.info(`  - scoringServiceUrl=${scoringServiceUrl}`);
 rootLogger.info(`  - targetGroupAddress=${targetGroupAddress}`);
 rootLogger.info(`  - backersGroupAddress=${backersGroupAddress}`);
 rootLogger.info(`  - fetchPageSize=${fetchPageSize}`);
-rootLogger.info(`  - blacklistChunkSize=${blacklistChunkSize}`);
 rootLogger.info(`  - scoreBatchSize=${scoreBatchSize}`);
 rootLogger.info(`  - scoreThreshold=${scoreThreshold}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
@@ -91,6 +93,7 @@ rootLogger.info(`  - safeAddress=${safeAddress || "(not set)"}`);
 rootLogger.info(`  - safeSignerPrivateKeyConfigured=${safeSignerPrivateKey.trim().length > 0}`);
 rootLogger.info(`  - dryRun=${dryRun}`);
 rootLogger.info(`  - runIntervalMinutes=${runIntervalMinutes}`);
+rootLogger.info(`  - scoreCacheTtlMinutes=${scoreCacheTtlMs / 60_000}`);
 rootLogger.info(`  - slackConfigured=${slackConfigured}`);
 
 void notifySlackStartup();
@@ -119,25 +122,30 @@ process.on("unhandledRejection", async (reason) => {
 });
 
 async function mainLoop(): Promise<void> {
+  startMetricsServer("gnosis-group");
   while (true) {
     const runStartedAt = Date.now();
     try {
+      await refreshBlacklist();
       const outcome = await runOnce(
         {
           blacklistingService,
           circlesRpc,
           groupService,
-          logger: runLogger
+          logger: runLogger,
+          scoreCache
         },
         config
       );
 
+      recordRunSuccess("gnosis-group", Date.now() - runStartedAt);
       rootLogger.info(
         `Run completed. Addresses with relative score > ${outcome.threshold}: ${outcome.aboveThresholdCount}`
       );
       await notifySlackRunSummary(outcome);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      recordRunError("gnosis-group");
       rootLogger.error("gnosis-group run failed:");
       rootLogger.error(formatErrorWithCauses(error));
       await notifySlackRunError(error);
@@ -190,7 +198,23 @@ function parseEnvNumber(name: string, fallback: number): number {
   return parsed;
 }
 
-mainLoop().catch((cause) => {
+async function refreshBlacklist(): Promise<void> {
+  try {
+    runLogger.info("Refreshing blacklist from remote service...");
+    await blacklistingService.loadBlacklist();
+    const count = blacklistingService.getBlacklistCount();
+    runLogger.info(`Blacklist refreshed successfully. ${count} addresses blacklisted.`);
+  } catch (error) {
+    runLogger.error("Failed to refresh blacklist:", error);
+    throw error;
+  }
+}
+
+async function start(): Promise<void> {
+  await mainLoop();
+}
+
+start().catch((cause) => {
   const error = cause instanceof Error ? cause : new Error(String(cause));
   rootLogger.error("gnosis-group run encountered an unrecoverable error:");
   rootLogger.error(formatErrorWithCauses(error));
@@ -200,8 +224,8 @@ mainLoop().catch((cause) => {
 
 async function notifySlackStartup(): Promise<void> {
   const header = dryRun
-    ? "🧪 **Gnosis Group Service Started (dry-run)**"
-    : "✅ **Gnosis Group Service Started**";
+    ? "🧪 *Gnosis Group Service Started (dry-run)*"
+    : "✅ *Gnosis Group Service Started*";
   const message =
     `${header}\n\n` +
     `- RPC: ${rpcUrl}\n` +
@@ -225,7 +249,7 @@ async function notifySlackStartup(): Promise<void> {
 
 async function notifySlackShutdown(signal: NodeJS.Signals): Promise<void> {
   try {
-    await slackService.notifySlackStartOrCrash(`🔄 **Gnosis Group Service shutting down**\n\nReceived ${signal}.`);
+    await slackService.notifySlackStartOrCrash(`🔄 *Gnosis Group Service shutting down*\n\nReceived ${signal}.`);
   } catch (error) {
     rootLogger.warn("Failed to send Slack shutdown notification:", error);
   }
@@ -240,8 +264,8 @@ async function notifySlackRunSummary(outcome: RunOutcome): Promise<void> {
   }
 
   const header = dryRun
-    ? "🧪 **Gnosis Group Dry-Run Summary**"
-    : "✅ **Gnosis Group Run Summary**";
+    ? "🧪 *Gnosis Group Dry-Run Summary*"
+    : "✅ *Gnosis Group Run Summary*";
 
   const lines: string[] = [
     header,
@@ -286,7 +310,7 @@ async function notifySlackRunSummary(outcome: RunOutcome): Promise<void> {
 }
 
 async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ **Gnosis Group run failed**\n\n${error.message}`;
+  const message = `⚠️ *Gnosis Group run failed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
     if (slackConfigured) {
@@ -298,7 +322,7 @@ async function notifySlackRunError(error: Error): Promise<void> {
 }
 
 async function notifySlackFatal(error: Error): Promise<void> {
-  const message = `🚨 **Gnosis Group Service crashed**\n\n${error.message}`;
+  const message = `🚨 *Gnosis Group Service crashed*\n\n${error.message}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {
