@@ -20,9 +20,6 @@
   },
   "dependencies": {
     "@circles-sdk/data": "^0.29.1",
-    "@opentelemetry/auto-instrumentations-node": "^0.70.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.212.0",
-    "@opentelemetry/sdk-node": "^0.212.0",
     "@safe-global/protocol-kit": "^6.1.2",
     "ethers": "^6.15.0",
     "multihashes": "^4.0.3",
