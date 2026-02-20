@@ -12,6 +12,7 @@ import {
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
 import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
+import {ConsecutiveErrorTracker} from "../../services/consecutiveErrorTracker";
 import {InMemoryRouterEnablementStore} from "./enablementStore";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
@@ -33,6 +34,7 @@ const slackConfigured = slackWebhookUrl.trim().length > 0;
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
 const enablementStore = new InMemoryRouterEnablementStore();
+const errorTracker = new ConsecutiveErrorTracker(3);
 
 async function refreshBlacklist(): Promise<void> {
   try {
@@ -109,6 +111,7 @@ async function mainLoop(): Promise<void> {
         config
       );
       recordRunSuccess("router-tms", Date.now() - runStartedAt);
+      errorTracker.recordSuccess();
       runLogger.info(
         "router-tms run completed: " +
           `uniqueHumans=${outcome.uniqueHumanCount} ` +
@@ -122,10 +125,13 @@ async function mainLoop(): Promise<void> {
       }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      const consecutiveErrors = errorTracker.recordError();
       recordRunError("router-tms");
       rootLogger.error("router-tms run failed:");
       rootLogger.error(formatErrorWithCauses(error));
-      void notifySlackRunError(error);
+      if (errorTracker.shouldAlert()) {
+        void notifySlackRunError(error, consecutiveErrors);
+      }
     }
 
     await delay(pollIntervalMs);
@@ -173,8 +179,8 @@ async function notifySlackStartup(): Promise<void> {
   }
 }
 
-async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ *Router-TMS run failed*\n\n${error.message}`;
+async function notifySlackRunError(error: Error, consecutiveErrors: number): Promise<void> {
+  const message = `⚠️ *Router-TMS run failed* (${consecutiveErrors} consecutive failures)\n\n${formatErrorWithCauses(error)}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {

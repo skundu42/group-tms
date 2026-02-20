@@ -7,6 +7,8 @@ import {SlackService} from "../../services/slackService";
 import {LoggerService} from "../../services/loggerService";
 import {IGroupService} from "../../interfaces/IGroupService";
 import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
+import {ConsecutiveErrorTracker} from "../../services/consecutiveErrorTracker";
+import {formatErrorWithCauses} from "../../formatError";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const oicGroupAddress = (process.env.OIC_GROUP_ADDRESS || "0x4E2564e5df6C1Fb10C1A018538de36E4D5844DE5").toLowerCase();
@@ -30,6 +32,7 @@ const affiliateRegistry = new AffiliateGroupEventsService(rpcUrl);
 const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || "";
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = !!slackWebhookUrl;
+const errorTracker = new ConsecutiveErrorTracker(3);
 
 validateConfig();
 
@@ -159,12 +162,28 @@ async function loop() {
         state,
       );
       recordRunSuccess("oic", Date.now() - runStartedAt);
+      errorTracker.recordSuccess();
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const consecutiveErrors = errorTracker.recordError();
       recordRunError("oic");
-      rootLogger.error("OIC runOnce failed:", err);
+      rootLogger.error("OIC runOnce failed:");
+      rootLogger.error(formatErrorWithCauses(error));
+      if (errorTracker.shouldAlert()) {
+        void notifySlackRunError(error, consecutiveErrors);
+      }
     }
 
     await delay(refreshIntervalSec * 1000);
+  }
+}
+
+async function notifySlackRunError(error: Error, consecutiveErrors: number): Promise<void> {
+  const message = `⚠️ *OIC Service runOnce error* (${consecutiveErrors} consecutive failures)\n\n${formatErrorWithCauses(error)}`;
+  try {
+    await slackService.notifySlackStartOrCrash(message);
+  } catch (slackError) {
+    rootLogger.warn("Failed to send run error notification to Slack:", slackError);
   }
 }
 

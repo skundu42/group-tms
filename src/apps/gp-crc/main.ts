@@ -14,6 +14,7 @@ import {
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
 import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
+import {ConsecutiveErrorTracker} from "../../services/consecutiveErrorTracker";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gp-crc");
@@ -31,6 +32,7 @@ const metriSafeApiKey = process.env.METRI_SAFE_API_KEY || "";
 const fetchPageSize = parseEnvInt("GP_CRC_FETCH_PAGE_SIZE", DEFAULT_FETCH_PAGE_SIZE);
 const pollIntervalMs = 10 * 60 * 1_000;
 const groupBatchSize = DEFAULT_GROUP_BATCH_SIZE;
+const errorTracker = new ConsecutiveErrorTracker(3);
 
 const circlesRpc = new CirclesRpcService(rpcUrl);
 const blacklistingService = new BlacklistingService(blacklistingServiceUrl);
@@ -123,12 +125,16 @@ async function mainLoop(): Promise<void> {
         config
       );
       recordRunSuccess("gp-crc", Date.now() - runStartedAt);
+      errorTracker.recordSuccess();
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      const consecutiveErrors = errorTracker.recordError();
       recordRunError("gp-crc");
       rootLogger.error("runOnce failed:");
       rootLogger.error(formatErrorWithCauses(error));
-      void notifySlackRunError(error);
+      if (errorTracker.shouldAlert()) {
+        void notifySlackRunError(error, consecutiveErrors);
+      }
     }
 
     await delay(pollIntervalMs);
@@ -209,8 +215,8 @@ async function notifySlackStartup(): Promise<void> {
 }
 
 
-async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ *GP-CRC TMS Service runOnce error*\n\n${error.message}`;
+async function notifySlackRunError(error: Error, consecutiveErrors: number): Promise<void> {
+  const message = `⚠️ *GP-CRC TMS Service runOnce error* (${consecutiveErrors} consecutive failures)\n\n${formatErrorWithCauses(error)}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
   } catch (slackError) {

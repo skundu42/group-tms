@@ -19,6 +19,7 @@ import {
 } from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
 import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
+import {ConsecutiveErrorTracker} from "../../services/consecutiveErrorTracker";
 
 const verboseLogging = !!process.env.VERBOSE_LOGGING;
 const rootLogger = new LoggerService(verboseLogging, "gnosis-group");
@@ -50,6 +51,7 @@ const circlesRpc = new CirclesRpcService(rpcUrl);
 const slackService = new SlackService(slackWebhookUrl);
 const slackConfigured = slackWebhookUrl.trim().length > 0;
 const scoreCache = new ScoreCache();
+const errorTracker = new ConsecutiveErrorTracker(3);
 
 const runLogger = rootLogger.child("run");
 let groupService: IGroupService | undefined;
@@ -139,16 +141,20 @@ async function mainLoop(): Promise<void> {
       );
 
       recordRunSuccess("gnosis-group", Date.now() - runStartedAt);
+      errorTracker.recordSuccess();
       rootLogger.info(
         `Run completed. Addresses with relative score > ${outcome.threshold}: ${outcome.aboveThresholdCount}`
       );
       await notifySlackRunSummary(outcome);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
+      const consecutiveErrors = errorTracker.recordError();
       recordRunError("gnosis-group");
       rootLogger.error("gnosis-group run failed:");
       rootLogger.error(formatErrorWithCauses(error));
-      await notifySlackRunError(error);
+      if (errorTracker.shouldAlert()) {
+        await notifySlackRunError(error, consecutiveErrors);
+      }
     }
 
     const elapsedMs = Date.now() - runStartedAt;
@@ -309,8 +315,8 @@ async function notifySlackRunSummary(outcome: RunOutcome): Promise<void> {
   }
 }
 
-async function notifySlackRunError(error: Error): Promise<void> {
-  const message = `⚠️ *Gnosis Group run failed*\n\n${error.message}`;
+async function notifySlackRunError(error: Error, consecutiveErrors: number): Promise<void> {
+  const message = `⚠️ *Gnosis Group run failed* (${consecutiveErrors} consecutive failures)\n\n${formatErrorWithCauses(error)}`;
   try {
     await slackService.notifySlackStartOrCrash(message);
     if (slackConfigured) {

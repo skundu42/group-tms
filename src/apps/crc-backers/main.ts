@@ -8,6 +8,7 @@ import {LoggerService} from "../../services/loggerService";
 import {runOnce} from "./logic";
 import {formatErrorWithCauses} from "../../formatError";
 import {startMetricsServer, recordRunSuccess, recordRunError} from "../../services/metricsService";
+import {ConsecutiveErrorTracker} from "../../services/consecutiveErrorTracker";
 
 const rpcUrl = process.env.RPC_URL || "https://rpc.aboutcircles.com/";
 const blacklistingServiceUrl = process.env.BLACKLISTING_SERVICE_URL || "https://squid-app-3gxnl.ondigitalocean.app/aboutcircles-advanced-analytics2/bot-analytics/blacklist";
@@ -25,7 +26,7 @@ const errorsBeforeCrash = 3;
 
 const rootLogger = new LoggerService(verboseLogging);
 
-const errors: any[] = [];
+const errorTracker = new ConsecutiveErrorTracker(errorsBeforeCrash);
 
 if (!dryRun) {
   if (!safeSignerPrivateKey || safeSignerPrivateKey.trim().length === 0) {
@@ -99,7 +100,7 @@ function delay(ms: number): Promise<void> {
 }
 
 async function loop() {
-  while (errors.length < errorsBeforeCrash) {
+  while (true) {
     const runStartedAt = Date.now();
     try {
       rootLogger.info("Checking for new backers...");
@@ -127,37 +128,33 @@ async function loop() {
       );
       nextFromBlock = outcome.nextFromBlock;
       recordRunSuccess("crc-backers", Date.now() - runStartedAt);
+      errorTracker.recordSuccess();
     } catch (caught: unknown) {
       const isError = caught instanceof Error;
       const baseError = isError ? caught : new Error(String(caught));
 
-      // Wrap so your callsite (this catch frame) appears in the printed stack.
       const wrapped = new Error("runOnce failed in loop()", {cause: baseError});
-      errors.push(wrapped);
+      const consecutiveErrors = errorTracker.recordError();
       recordRunError("crc-backers");
 
-      const errorIndex = errors.length;
-      const thresholdReached = errorIndex >= errorsBeforeCrash;
-
-      rootLogger.error(`Error ${errorIndex} of max. ${errorsBeforeCrash}`);
+      rootLogger.error(`Consecutive error ${consecutiveErrors} of ${errorsBeforeCrash}`);
       rootLogger.error(formatErrorWithCauses(wrapped));
 
-      if (thresholdReached) {
-        rootLogger.error("Error threshold reached. Exiting with code 1.");
-        
-        // Send Slack notification before crashing
+      if (errorTracker.shouldAlert()) {
+        rootLogger.error("Consecutive error threshold reached. Exiting with code 1.");
+
         try {
           const crashMessage = `🚨 *Backers Group TMS Service is CRASHING*\n\n` +
-            `Error threshold reached (${errorIndex}/${errorsBeforeCrash}).\n` +
+            `${consecutiveErrors} consecutive failures (threshold: ${errorsBeforeCrash}).\n` +
             `Last error: ${baseError.message}\n\n` +
             `Service will exit with code 1. Please investigate and restart.`;
-          
+
           await slackService.notifySlackStartOrCrash(crashMessage);
           rootLogger.info("Slack crash notification sent successfully.");
         } catch (slackError) {
           rootLogger.error("Failed to send Slack crash notification:", slackError);
         }
-        
+
         process.exit(1);
       }
     }
