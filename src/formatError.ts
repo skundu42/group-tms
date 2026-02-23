@@ -25,7 +25,11 @@ export function formatErrorWithCauses(err: unknown): string {
         continue;
       }
     } else {
-      parts.push(typeof current === "string" ? current : inspect(current, {depth: 5}));
+      const MAX_CAUSE_LENGTH = 10_000;
+      const raw = typeof current === "string"
+        ? current
+        : inspect(current, { depth: 2, maxStringLength: 1000, breakLength: 120 });
+      parts.push(raw.length > MAX_CAUSE_LENGTH ? raw.slice(0, MAX_CAUSE_LENGTH) + "\n... [truncated]" : raw);
     }
     break;
   }
@@ -34,6 +38,8 @@ export function formatErrorWithCauses(err: unknown): string {
     parts.push("[Circular cause elided]");
   }
 
-  return parts.join("\n");
+  const MAX_TOTAL_LENGTH = 50_000;
+  const result = parts.join("\n");
+  return result.length > MAX_TOTAL_LENGTH ? result.slice(0, MAX_TOTAL_LENGTH) + "\n... [truncated]" : result;
 }
 
