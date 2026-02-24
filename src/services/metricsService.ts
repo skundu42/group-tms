@@ -42,20 +42,49 @@ const errorsTotal = new Counter({
 
 const rpcHealthy = new Gauge({
   name: "group_tms_rpc_healthy",
-  help: "1 if the RPC endpoint is reachable, 0 otherwise",
+  help: "Whether the worker can reach the RPC endpoint (1=healthy, 0=unhealthy)",
   labelNames: ["app"] as const,
   registers: [registry]
 });
+
+/** Track per-app RPC readiness for the /health/ready endpoint. */
+const rpcHealthState = new Map<string, boolean>();
+
+export function setRpcHealthy(appName: string, healthy: boolean): void {
+  rpcHealthState.set(appName, healthy);
+  rpcHealthy.labels(appName).set(healthy ? 1 : 0);
+}
 
 export function startMetricsServer(
   appName: string,
   port: number = Number.parseInt(process.env.METRICS_PORT || "9091", 10)
 ): http.Server {
-  // Initialise the last-success gauge so Prometheus sees a 0 value
-  // (rather than absent) until the first successful run completes.
+  // Initialise gauges so Prometheus sees a 0 value (rather than absent)
+  // until the first run completes.
   lastSuccessTimestamp.labels(appName).set(0);
+  rpcHealthy.labels(appName).set(0);
+  rpcHealthState.set(appName, false);
 
-  const server = http.createServer(async (_req, res) => {
+  const server = http.createServer(async (req, res) => {
+    const url = req.url || "/";
+
+    // GET /health/live — process liveness (always 200)
+    if (url === "/health/live") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    // GET /health/ready — RPC readiness (200 if healthy, 503 if not)
+    if (url === "/health/ready") {
+      const healthy = rpcHealthState.get(appName) === true;
+      const code = healthy ? 200 : 503;
+      res.writeHead(code, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: healthy ? "ready" : "unavailable" }));
+      return;
+    }
+
+    // GET /metrics (default) — Prometheus scrape
     try {
       const metrics = await registry.metrics();
       res.writeHead(200, { "Content-Type": registry.contentType });
@@ -77,6 +106,7 @@ export function recordRunSuccess(appName: string, durationMs: number): void {
   runsTotal.labels(appName, "success").inc();
   runDuration.labels(appName).observe(durationMs / 1000);
   lastSuccessTimestamp.labels(appName).set(Date.now() / 1000);
+  setRpcHealthy(appName, true);
 }
 
 export function recordRunError(appName: string): void {
@@ -84,8 +114,13 @@ export function recordRunError(appName: string): void {
   errorsTotal.labels(appName).inc();
 }
 
-export function recordRpcHealth(appName: string, healthy: boolean): void {
-  rpcHealthy.labels(appName).set(healthy ? 1 : 0);
+/**
+ * Mark RPC as unhealthy for a specific app.
+ * Call this when the run loop catches an error that indicates
+ * the RPC endpoint is unreachable (network/timeout/provider errors).
+ */
+export function recordRpcUnhealthy(appName: string): void {
+  setRpcHealthy(appName, false);
 }
 
 export function getRegistry(): Registry {

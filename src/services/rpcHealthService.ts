@@ -1,5 +1,5 @@
 import {ILoggerService} from "../interfaces/ILoggerService";
-import {recordRpcHealth} from "./metricsService";
+import {setRpcHealthy} from "./metricsService";
 
 type RpcHealthResponse = {
   result?: unknown;
@@ -77,7 +77,7 @@ export async function ensureRpcHealthyOrNotify(params: {
   timeoutMs?: number;
 }): Promise<boolean> {
   const health = await checkRpcHealth(params.rpcUrl, params.timeoutMs);
-  recordRpcHealth(params.appName, health.healthy);
+  setRpcHealthy(params.appName, health.healthy);
 
   if (!health.healthy) {
     const detail = health.error ?? "unknown error";
