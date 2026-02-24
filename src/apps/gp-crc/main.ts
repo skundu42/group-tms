@@ -83,7 +83,6 @@ rootLogger.info(`  - pollIntervalMs=${pollIntervalMs}`);
 rootLogger.info(`  - groupAddress=${groupAddress}`);
 rootLogger.info(`  - groupBatchSize=${groupBatchSize}`);
 rootLogger.info(`  - metriSafeGraphqlUrl=${metriSafeGraphqlUrl}`);
-rootLogger.info(`  - metriSafeApiKeyConfigured=${metriSafeApiKey.trim().length > 0}`);
 rootLogger.info(`  - safeAddress=${safeAddress || "(not set)"}`);
 rootLogger.info(`  - safeSignerConfigured=${safeSignerPrivateKey.trim().length > 0}`);
 rootLogger.info(`  - dryRun=${dryRun}`);
@@ -113,12 +112,12 @@ async function mainLoop(): Promise<void> {
   while (true) {
     const runStartedAt = Date.now();
     try {
-      await ensureRpcHealthyOrNotify({
+      const isHealthy = await ensureRpcHealthyOrNotify({
         appName: "gp-crc",
         rpcUrl,
-        slackService,
         logger: rootLogger
       });
+      if (!isHealthy) { await delay(pollIntervalMs); continue; }
       await refreshBlacklist();
       const outcome = await runOnce(
         {
